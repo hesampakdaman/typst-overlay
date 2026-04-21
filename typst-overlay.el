@@ -660,9 +660,12 @@ Unchanged entries are no-op."
      (typst-overlay-registry-records typst-overlay--registry))))
 
 (defun typst-overlay--on-theme-change (&rest _)
-  "Handle theme changes by recoloring overlays."
-  (when typst-overlay-mode
-    (typst-overlay--recolor-all-overlays)))
+  "Handle theme changes by recoloring overlays in all typst-overlay buffers."
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when typst-overlay-mode
+          (typst-overlay--recolor-all-overlays))))))
 
 (defun typst-overlay--teardown ()
   "Remove overlays and clear buffer-local runtime state."
