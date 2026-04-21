@@ -760,9 +760,8 @@ CALLBACK receives either the symbol `success' or `failure'.
                 t)))
            (unwind-protect
                (funcall callback (if ok 'success 'failure))
-             (when ok
-               (when (buffer-live-p (process-buffer proc))
-                 (kill-buffer (process-buffer proc)))))))))
+             (when (buffer-live-p (process-buffer proc))
+               (kill-buffer (process-buffer proc))))))))
     (let ((proc (get-buffer-process buffer)))
       (process-send-string proc source)
       (process-send-eof proc)
