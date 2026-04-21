@@ -834,7 +834,8 @@ CALLBACK receives either the symbol `success' or `failure'.
      plan
      typst-overlay--registry
      typst-overlay--artifact-cache)
-    (setq typst-overlay--snapshot new-snapshot)))
+    (setq typst-overlay--snapshot new-snapshot))
+  t)
 
 ;; mode
 (defun typst-overlay--after-save ()
