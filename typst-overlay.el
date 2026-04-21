@@ -352,13 +352,28 @@ The resulting diff contains:
 (defun typst-overlay--make-artifact-cache ()
   (make-hash-table :test #'equal))
 
+(defun typst-overlay--load-artifact-cache ()
+  "Populate artifact cache from SVG files already on disk."
+  (let* ((file (buffer-file-name))
+         (dir (and file (file-name-directory file)))
+         (cache-dir (and dir (expand-file-name typst-overlay--cache-dir-name dir))))
+    (when (and cache-dir (file-directory-p cache-dir))
+      (dolist (svg-path (directory-files cache-dir t "\\.svg\\'"))
+        (let ((cache-key (file-name-base svg-path)))
+          (puthash cache-key
+                   (make-typst-overlay-artifact
+                    :cache-key cache-key
+                    :svg-path svg-path)
+                   typst-overlay--artifact-cache))))))
+
 (defun typst-overlay--ensure-runtime ()
   (unless typst-overlay--registry
     (setq typst-overlay--registry
           (typst-overlay--make-registry)))
   (unless typst-overlay--artifact-cache
     (setq typst-overlay--artifact-cache
-          (typst-overlay--make-artifact-cache))))
+          (typst-overlay--make-artifact-cache))
+    (typst-overlay--load-artifact-cache)))
 
 (defun typst-overlay--occurrence-key (element)
   (cons (typst-overlay-element-beg element)
