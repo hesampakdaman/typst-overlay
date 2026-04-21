@@ -616,9 +616,19 @@ Unchanged entries are no-op."
       (setq typst-overlay--active-overlay nil))
     (delete-overlay overlay)))
 
+(defun typst-overlay--recolor-svg (svg-path)
+  "Read SVG-PATH and replace black with the current foreground color."
+  (let ((fg (typst-overlay--foreground-color))
+        (contents (with-temp-buffer
+                    (insert-file-contents svg-path)
+                    (buffer-string))))
+    (replace-regexp-in-string
+     (regexp-quote "#000000") fg contents t t)))
+
 (defun typst-overlay--place-overlay-from-svg (beg end svg-path)
   "Create and return an overlay from BEG to END displaying SVG-PATH."
-  (let* ((image (create-image svg-path 'svg nil :ascent 'center :scale 1.2))
+  (let* ((svg-data (typst-overlay--recolor-svg svg-path))
+         (image (create-image svg-data 'svg t :ascent 'center :scale 1.2))
          (overlay (make-overlay beg end nil t nil)))
     (overlay-put overlay 'display image)
     (overlay-put overlay 'typst-overlay t)
@@ -631,6 +641,28 @@ Unchanged entries are no-op."
       (typst-overlay--hide-overlay overlay)
       (setq typst-overlay--active-overlay overlay))
     overlay))
+
+(defun typst-overlay--recolor-all-overlays ()
+  "Recolor all visible overlays to match the current foreground."
+  (when (and typst-overlay-mode typst-overlay--registry)
+    (maphash
+     (lambda (_key record)
+       (when (eq (typst-overlay-record-state record) 'visible)
+         (let* ((artifact (typst-overlay-record-artifact record))
+                (overlay (typst-overlay-record-overlay record)))
+           (when (and artifact (overlayp overlay))
+             (let* ((svg-data (typst-overlay--recolor-svg
+                               (typst-overlay-artifact-svg-path artifact)))
+                    (image (create-image svg-data 'svg t :ascent 'center :scale 1.2)))
+               (overlay-put overlay 'typst-overlay-image image)
+               (unless (eq overlay typst-overlay--active-overlay)
+                 (overlay-put overlay 'display image)))))))
+     (typst-overlay-registry-records typst-overlay--registry))))
+
+(defun typst-overlay--on-theme-change (&rest _)
+  "Handle theme changes by recoloring overlays."
+  (when typst-overlay-mode
+    (typst-overlay--recolor-all-overlays)))
 
 (defun typst-overlay--teardown ()
   "Remove overlays and clear buffer-local runtime state."
@@ -651,12 +683,11 @@ Unchanged entries are no-op."
 (defun typst-overlay--build-element-source (element)
   "Build a complete Typst source string for ELEMENT."
   (let ((prelude (typst-overlay-element-prelude-text element))
-        (math (typst-overlay-element-text element))
-        (color (typst-overlay--foreground-color)))
+        (math (typst-overlay-element-text element)))
     (concat
      "#set page(width: auto, height: auto, margin: 1pt, fill: none)\n"
      "#set text(top-edge: \"bounds\", bottom-edge: \"bounds\")\n"
-     (format "#set text(fill: rgb(\"%s\"))\n" color)
+     "#set text(fill: rgb(\"#000000\"))\n"
      prelude
      (unless (string-empty-p prelude) "\n\n")
      math
@@ -818,9 +849,13 @@ CALLBACK receives either the symbol `success' or `failure'.
         (typst-overlay--ensure-runtime)
         (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
         (add-hook 'after-save-hook #'typst-overlay--after-save nil t)
+        (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
+        (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
         (typst-overlay--refresh))
     (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
     (remove-hook 'after-save-hook #'typst-overlay--after-save t)
+    (remove-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
+    (remove-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
     (typst-overlay--teardown)))
 
 (provide 'typst-overlay)
