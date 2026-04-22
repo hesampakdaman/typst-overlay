@@ -667,8 +667,6 @@ Unchanged entries are no-op."
     (overlay-put overlay 'typst-overlay-image image)
     (overlay-put overlay 'evaporate t)
     (overlay-put overlay 'modification-hooks '(typst-overlay--invalidate-overlay))
-    (overlay-put overlay 'insert-in-front-hooks '(typst-overlay--invalidate-overlay))
-    (overlay-put overlay 'insert-behind-hooks '(typst-overlay--invalidate-overlay))
     (when (and (>= (point) beg) (<= (point) end))
       (typst-overlay--hide-overlay overlay)
       (setq typst-overlay--active-overlay overlay))
