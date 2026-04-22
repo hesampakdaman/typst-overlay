@@ -834,8 +834,9 @@ CALLBACK receives either the symbol `success' or `failure'.
    :code-nodes nil
    :math-nodes nil))
 
-(defun typst-overlay--refresh ()
+(defun typst-overlay-refresh ()
   "Refresh Typst overlays for the current buffer."
+  (interactive)
   (typst-overlay--ensure-runtime)
   (let* ((old-snapshot (or typst-overlay--snapshot
                            (typst-overlay--empty-snapshot)))
@@ -860,7 +861,7 @@ CALLBACK receives either the symbol `success' or `failure'.
 (defun typst-overlay--after-save ()
   "Refresh overlays after saving the buffer."
   (when typst-overlay-mode
-    (typst-overlay--refresh)))
+    (typst-overlay-refresh)))
 
 (defun typst-overlay--enable ()
   (unless (executable-find "typst")
@@ -869,7 +870,8 @@ CALLBACK receives either the symbol `success' or `failure'.
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
   (add-hook 'after-save-hook #'typst-overlay--after-save nil t)
   (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
-  (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change))
+  (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
+  (typst-overlay-refresh))
 
 (defun typst-overlay--disable ()
   (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
