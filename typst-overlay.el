@@ -441,11 +441,25 @@ GENERATION is the generation to stamp onto the returned plan."
   "Build place ops for entries that can reuse an existing artifact.
 
 Cases:
-- moved + old record has artifact  -> place-op
-- added + artifact cache hit       -> place-op"
+- moved + old record has artifact            -> place-op
+- added + artifact cache hit                 -> place-op
+- unchanged + artifact exists but no overlay -> place-op"
   (let (ops)
     (dolist (entry (typst-overlay-diff-entries diff))
       (pcase (typst-overlay-diff-entry-status entry)
+        ('unchanged
+         (let* ((old-element (typst-overlay-diff-entry-old entry))
+                (new-element (typst-overlay-diff-entry-new entry))
+                (record (typst-overlay--get-record registry old-element))
+                (artifact (and record (typst-overlay-record-artifact record)))
+                (overlay (and record (typst-overlay-record-overlay record))))
+           (when (and artifact (null overlay))
+             (push (make-typst-overlay-place-op
+                    :old old-element
+                    :new new-element
+                    :artifact artifact)
+                   ops))))
+
         ('moved
          (let* ((old-element (typst-overlay-diff-entry-old entry))
                 (new-element (typst-overlay-diff-entry-new entry))
@@ -542,7 +556,7 @@ Unchanged entries are no-op."
       (when record
         (typst-overlay--delete-record-overlay record))
       (typst-overlay--remove-record registry old-element))
-    (when (null old-element)
+    (unless record
       (setq record (make-typst-overlay-record)))
     (setf (typst-overlay-record-element record) new-element
           (typst-overlay-record-state record) 'visible
