@@ -14,15 +14,34 @@
 (require 'seq)
 (require 'subr-x)
 
+;; customization
+(defgroup typst-overlay nil
+  "Render Typst math equations as overlays."
+  :group 'tools
+  :prefix "typst-overlay-")
+
+(defcustom typst-overlay-scale 1.3
+  "Scale factor for rendered equations."
+  :type 'number
+  :group 'typst-overlay)
+
+(defcustom typst-overlay-cache-dir-name ".typst-overlay-cache"
+  "Name of the directory used to store rendered SVG files."
+  :type 'string
+  :group 'typst-overlay)
+
+(defcustom typst-overlay-max-active-compiles 8
+  "Maximum number of concurrent Typst compilation processes."
+  :type 'natnum
+  :group 'typst-overlay)
+
 ;; constants / buffer-local state
-(defconst typst-overlay--cache-dir-name ".typst-overlay-cache")
-(defconst typst-overlay--max-active-compiles 8)
-(defvar-local typst-overlay--compile-queue nil)
-(defvar-local typst-overlay--active-compiles 0)
 (defvar-local typst-overlay--snapshot nil)
 (defvar-local typst-overlay--active-overlay nil)
 (defvar-local typst-overlay--registry nil)
 (defvar-local typst-overlay--artifact-cache nil)
+(defvar-local typst-overlay--compile-queue nil)
+(defvar-local typst-overlay--active-compiles 0)
 
 ;; analyzer
 (cl-defstruct typst-overlay-code-node
@@ -628,7 +647,7 @@ Unchanged entries are no-op."
 (defun typst-overlay--place-overlay-from-svg (beg end svg-path)
   "Create and return an overlay from BEG to END displaying SVG-PATH."
   (let* ((svg-data (typst-overlay--recolor-svg svg-path))
-         (image (create-image svg-data 'svg t :ascent 'center :scale 1.2))
+         (image (create-image svg-data 'svg t :ascent 'center :scale typst-overlay-scale))
          (overlay (make-overlay beg end nil t nil)))
     (overlay-put overlay 'display image)
     (overlay-put overlay 'typst-overlay t)
@@ -653,7 +672,7 @@ Unchanged entries are no-op."
            (when (and artifact (overlayp overlay))
              (let* ((svg-data (typst-overlay--recolor-svg
                                (typst-overlay-artifact-svg-path artifact)))
-                    (image (create-image svg-data 'svg t :ascent 'center :scale 1.2)))
+                    (image (create-image svg-data 'svg t :ascent 'center :scale typst-overlay-scale)))
                (overlay-put overlay 'typst-overlay-image image)
                (unless (eq overlay typst-overlay--active-overlay)
                  (overlay-put overlay 'display image)))))))
@@ -703,7 +722,7 @@ Unchanged entries are no-op."
 (defun typst-overlay--drain-compile-queue ()
   "Start queued compiles until the concurrency limit is reached."
   (while (and typst-overlay--compile-queue
-              (< typst-overlay--active-compiles typst-overlay--max-active-compiles))
+              (< typst-overlay--active-compiles typst-overlay-max-active-compiles))
     (let ((thunk (pop typst-overlay--compile-queue)))
       (funcall thunk))))
 
@@ -727,7 +746,7 @@ Unchanged entries are no-op."
                               element generation cache-key svg-path artifact-cache)
                            (typst-overlay--handle-render-failure
                             element generation)))))))
-    (if (< typst-overlay--active-compiles typst-overlay--max-active-compiles)
+    (if (< typst-overlay--active-compiles typst-overlay-max-active-compiles)
         (progn
           (cl-incf typst-overlay--active-compiles)
           (typst-overlay--start-async-compile source svg-path element callback))
