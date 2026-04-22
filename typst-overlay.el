@@ -843,23 +843,29 @@ CALLBACK receives either the symbol `success' or `failure'.
   (when typst-overlay-mode
     (typst-overlay--refresh)))
 
+(defun typst-overlay--enable ()
+  (unless (executable-find "typst")
+    (user-error "typst not found in PATH."))
+  (typst-overlay--ensure-runtime)
+  (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
+  (add-hook 'after-save-hook #'typst-overlay--after-save nil t)
+  (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
+  (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change))
+
+(defun typst-overlay--disable ()
+  (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
+  (remove-hook 'after-save-hook #'typst-overlay--after-save t)
+  (remove-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
+  (remove-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
+  (typst-overlay--teardown))
+
 ;;;###autoload
 (define-minor-mode typst-overlay-mode
   "Render Typst math overlays."
   :lighter " TypstOv"
   (if typst-overlay-mode
-      (progn
-        (typst-overlay--ensure-runtime)
-        (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
-        (add-hook 'after-save-hook #'typst-overlay--after-save nil t)
-        (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
-        (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
-        (typst-overlay--refresh))
-    (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
-    (remove-hook 'after-save-hook #'typst-overlay--after-save t)
-    (remove-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
-    (remove-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
-    (typst-overlay--teardown)))
+      (typst-overlay--enable)
+    (typst-overlay--disable)))
 
 (provide 'typst-overlay)
 
