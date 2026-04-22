@@ -375,7 +375,7 @@ The resulting diff contains:
   "Populate artifact cache from SVG files already on disk."
   (let* ((file (buffer-file-name))
          (dir (and file (file-name-directory file)))
-         (cache-dir (and dir (expand-file-name typst-overlay--cache-dir-name dir))))
+         (cache-dir (and dir (expand-file-name typst-overlay-cache-dir-name dir))))
     (when (and cache-dir (file-directory-p cache-dir))
       (dolist (svg-path (directory-files cache-dir t "\\.svg\\'"))
         (let ((cache-key (file-name-base svg-path)))
@@ -469,7 +469,6 @@ Cases:
                     :new new-element
                     :artifact artifact)
                    ops))))))
-
     (nreverse ops)))
 
 (defun typst-overlay--plan-render-ops (diff registry artifact-cache)
@@ -820,7 +819,7 @@ CALLBACK receives either the symbol `success' or `failure'.
          (dir (and file (file-name-directory file))))
     (unless dir
       (error "typst-overlay requires a file-backed buffer"))
-    (let ((cache-dir (expand-file-name typst-overlay--cache-dir-name dir)))
+    (let ((cache-dir (expand-file-name typst-overlay-cache-dir-name dir)))
       (unless (file-directory-p cache-dir)
         (make-directory cache-dir t))
       (expand-file-name (concat cache-key ".svg") cache-dir))))
