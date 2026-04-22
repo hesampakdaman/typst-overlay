@@ -646,7 +646,14 @@ Unchanged entries are no-op."
   (when (overlayp overlay)
     (when (eq overlay typst-overlay--active-overlay)
       (setq typst-overlay--active-overlay nil))
-    (delete-overlay overlay)))
+    (delete-overlay overlay)
+    (when typst-overlay--registry
+      (maphash
+       (lambda (_key record)
+         (when (eq (typst-overlay-record-overlay record) overlay)
+           (setf (typst-overlay-record-overlay record) nil
+                 (typst-overlay-record-state record) 'stale)))
+       (typst-overlay-registry-records typst-overlay--registry)))))
 
 (defun typst-overlay--recolor-svg (svg-path)
   "Read SVG-PATH and replace black with the current foreground color."
