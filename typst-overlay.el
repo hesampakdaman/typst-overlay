@@ -913,7 +913,6 @@ Intended for use in `after-save-hook'."
     (user-error "typst not found in PATH."))
   (typst-overlay--ensure-runtime)
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
-  (add-hook 'after-save-hook #'typst-overlay--after-save nil t)
   (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
   (typst-overlay-refresh))
