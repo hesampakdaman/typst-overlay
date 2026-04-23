@@ -276,8 +276,11 @@ The result is returned in document order."
       (let* ((cache-key (typst-overlay-element-cache-key element))
              (queue (gethash cache-key table)))
         (puthash cache-key
-                 (append queue (list element))
+                 (cons element queue)
                  table)))
+    (maphash (lambda (key queue)
+               (puthash key (nreverse queue) table))
+             table)
     table))
 
 (defun typst-overlay--find-old-match (new-element old-queues)
