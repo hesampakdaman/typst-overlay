@@ -509,6 +509,17 @@ Unchanged entries are no-op."
   (let (ops)
     (dolist (entry (typst-overlay-diff-entries diff))
       (pcase (typst-overlay-diff-entry-status entry)
+        ('unchanged
+         (let* ((old-element (typst-overlay-diff-entry-old entry))
+                (new-element (typst-overlay-diff-entry-new entry))
+                (record (typst-overlay--get-record registry old-element)))
+           (when (and record
+                      (eq (typst-overlay-record-state record) 'stale))
+             (push (make-typst-overlay-render-op
+                    :old old-element
+                    :new new-element)
+                   ops))))
+
         ('moved
          (let* ((old-element (typst-overlay-diff-entry-old entry))
                 (new-element (typst-overlay-diff-entry-new entry))
@@ -889,19 +900,19 @@ CALLBACK receives either the symbol `success' or `failure'.
          (new-snapshot (typst-overlay--make-snapshot analysis))
          (diff (typst-overlay--diff-snapshots old-snapshot new-snapshot))
          (generation (1+ (typst-overlay-registry-generation
-                          typst-overlay--registry)))
-         (plan (typst-overlay--plan-render
-                diff
-                typst-overlay--registry
-                typst-overlay--artifact-cache
-                generation)))
+                          typst-overlay--registry))))
     (typst-overlay--invalidate-overlays-past-error
      (typst-overlay-analysis-first-error analysis))
-    (typst-overlay--apply-render-plan
-     plan
-     typst-overlay--registry
-     typst-overlay--artifact-cache)
-    (setq typst-overlay--snapshot new-snapshot))
+    (let ((plan (typst-overlay--plan-render
+                 diff
+                 typst-overlay--registry
+                 typst-overlay--artifact-cache
+                 generation)))
+      (typst-overlay--apply-render-plan
+       plan
+       typst-overlay--registry
+       typst-overlay--artifact-cache)
+      (setq typst-overlay--snapshot new-snapshot)))
   t)
 
 ;; mode
