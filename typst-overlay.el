@@ -466,7 +466,9 @@ Cases:
                 (record (typst-overlay--get-record registry old-element))
                 (artifact (and record (typst-overlay-record-artifact record)))
                 (overlay (and record (typst-overlay-record-overlay record))))
-           (when (and artifact (null overlay))
+           (when (and artifact
+                      (null overlay)
+                      (not (eq (typst-overlay-record-state record) 'stale)))
              (push (make-typst-overlay-place-op
                     :old old-element
                     :new new-element
