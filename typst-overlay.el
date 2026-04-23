@@ -112,7 +112,7 @@ returned in document order."
      :text text
      :text-hash (md5 text))))
 
-(defun typst-overlay--collect-math-nodes ()
+(defun typst-overlay--collect-math-nodes (root first-error)
   "Collect math nodes that should be rendered (i.e. in content, not code).
 
 We query all `math` nodes via tree-sitter. However, math can appear
@@ -126,30 +126,31 @@ For each math node, we walk up its parent chain:
 - If neither is found (unexpected/edge case), we include it by default.
 
 This effectively selects math expressions that belong to the document
-body rather than programmatic code."
-  (let* ((root (treesit-buffer-root-node))
-         (query '((math) @math))
+body rather than programmatic code.
+Math nodes that appear after a parse error in the document are excluded."
+  (let* ((query '((math) @math))
          (captures (treesit-query-capture root query))
          result)
     (dolist (cap captures)
       (let* ((node (cdr cap))
+             (node-beg (treesit-node-start node))
              (parent (treesit-node-parent node))
              (include nil)
              (done nil))
-        ;; Walk up to decide whether this math node lives in `content`
-        ;; (include) or inside `code` (exclude).
-        (while (and parent (not done))
-          (pcase (treesit-node-type parent)
-            ("content"
-             (setq include t)
-             (setq done t))
-            ("code"
-             (setq include nil)
-             (setq done t)))
-          (setq parent (treesit-node-parent parent)))
-        ;; Include if explicitly in content, or if no parent found.
-        (when (or include (not done))
-          (push (typst-overlay--make-math-node node) result))))
+        (when (or (null first-error) (< node-beg first-error))
+          ;; Walk up to decide whether this math node lives in `content`
+          ;; (include) or inside `code` (exclude).
+          (while (and parent (not done))
+            (pcase (treesit-node-type parent)
+              ("content"
+               (setq include t)
+               (setq done t))
+              ("code"
+               (setq include nil)
+               (setq done t)))
+            (setq parent (treesit-node-parent parent)))
+          (when (or include (not done))
+            (push (typst-overlay--make-math-node node) result)))))
     (nreverse result)))
 
 (defun typst-overlay--sort-math-nodes (nodes)
@@ -160,14 +161,23 @@ body rather than programmatic code."
 
 (cl-defstruct typst-overlay-analysis
   code-nodes
-  math-nodes)
+  math-nodes
+  first-error)
 
 (defun typst-overlay--analyze ()
-  (make-typst-overlay-analysis
-   :code-nodes (typst-overlay--sort-code-nodes
-                (typst-overlay--collect-code-nodes))
-   :math-nodes (typst-overlay--sort-math-nodes
-                (typst-overlay--collect-math-nodes))))
+  (let* ((root (treesit-buffer-root-node))
+         (error-captures (treesit-query-capture root '((ERROR) @error)))
+         (first-error (and error-captures
+                           (apply #'min
+                                  (mapcar (lambda (cap)
+                                            (treesit-node-start (cdr cap)))
+                                          error-captures)))))
+    (make-typst-overlay-analysis
+     :code-nodes (typst-overlay--sort-code-nodes
+                  (typst-overlay--collect-code-nodes))
+     :math-nodes (typst-overlay--sort-math-nodes
+                  (typst-overlay--collect-math-nodes root first-error))
+     :first-error first-error)))
 
 
 ;; snapshot
@@ -843,6 +853,18 @@ CALLBACK receives either the symbol `success' or `failure'.
         (make-directory cache-dir t))
       (expand-file-name (concat cache-key ".svg") cache-dir))))
 
+(defun typst-overlay--invalidate-overlays-past-error (first-error)
+  "Delete all overlays starting at or after FIRST-ERROR position."
+  (when (and first-error typst-overlay--registry)
+    (maphash
+     (lambda (_key record)
+       (let ((element (typst-overlay-record-element record)))
+         (when (and element
+                    (>= (typst-overlay-element-beg element) first-error))
+           (typst-overlay--delete-record-overlay record)
+           (setf (typst-overlay-record-state record) 'stale))))
+     (typst-overlay-registry-records typst-overlay--registry))))
+
 ;; loop
 (defun typst-overlay--empty-snapshot ()
   "Return an empty snapshot."
@@ -868,6 +890,8 @@ CALLBACK receives either the symbol `success' or `failure'.
                 typst-overlay--registry
                 typst-overlay--artifact-cache
                 generation)))
+    (typst-overlay--invalidate-overlays-past-error
+     (typst-overlay-analysis-first-error analysis))
     (typst-overlay--apply-render-plan
      plan
      typst-overlay--registry
