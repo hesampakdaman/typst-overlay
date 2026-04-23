@@ -877,6 +877,8 @@ CALLBACK receives either the symbol `success' or `failure'.
 (defun typst-overlay-refresh ()
   "Refresh Typst overlays for the current buffer."
   (interactive)
+  (unless typst-overlay-mode
+    (user-error "typst-overlay-mode not active"))
   (typst-overlay--ensure-runtime)
   (let* ((old-snapshot (or typst-overlay--snapshot
                            (typst-overlay--empty-snapshot)))
@@ -900,8 +902,9 @@ CALLBACK receives either the symbol `success' or `failure'.
   t)
 
 ;; mode
-(defun typst-overlay--after-save ()
-  "Refresh overlays after saving the buffer."
+(defun typst-overlay-save-refresh ()
+  "Refresh Typst overlays if `typst-overlay-mode' is active.
+Intended for use in `after-save-hook'."
   (when typst-overlay-mode
     (typst-overlay-refresh)))
 
