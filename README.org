@@ -1,0 +1,40 @@
+#+title: typst-overlay
+#+author: Hesam Pakdaman
+
+Render Typst math equations as inline overlays in Emacs. Equations are asynchronously compiled to SVG using the =typst= compiler and displayed on top of the source text. Overlays are visible when the cursor is outside the equation and hidden when the cursor moves inside, revealing the raw source for editing. Overlays are invalidated when the underlying text is modified and restored on the next refresh.
+
+** Requirements
+- Emacs 29.1 or later
+- [[https://typst.app][typst]] compiler available on =PATH=
+- Tree-sitter grammar for Typst
+
+** Installation
+#+begin_src emacs-lisp
+  (use-package typst-overlay
+    :vc (:url "https://github.com/hesampakdaman/typst-overlay")
+    :custom
+    ;; Optional: shown values are the defaults
+    (typst-overlay-scale 1.3)
+    (typst-overlay-max-active-compiles 8)
+    :hook ((typst-ts-mode . typst-overlay-mode)
+           (after-save . typst-overlay-save-refresh)))
+#+end_src
+
+** Usage
+Enable the minor mode in a =typst-ts-mode= buffer with =M-x typst-overlay-mode=. To render overlays manually run =M-x typst-overlay-refresh=.
+
+** Configuration
+All options are available via =M-x customize-group RET typst-overlay=.
+|-------------------------------------+------------------------+--------------------------------------|
+| Variable                            | Default                | Description                          |
+|-------------------------------------+------------------------+--------------------------------------|
+| =typst-overlay-scale=               | =1.3=                  | Scale factor for rendered equations  |
+| =typst-overlay-cache-dir-name=      | =.typst-overlay-cache= | Directory name for cached SVG files  |
+| =typst-overlay-max-active-compiles= | =8=                    | Max concurrent compilation processes |
+|-------------------------------------+------------------------+--------------------------------------|
+
+** Contributing
+Bug reports and patches are welcome.
+
+** License
+GPL-3.0
