@@ -42,6 +42,10 @@
 (defvar-local typst-overlay--artifact-cache nil)
 (defvar-local typst-overlay--compile-queue nil)
 (defvar-local typst-overlay--active-compiles 0)
+(defvar-local typst-overlay-analyzer #'typst-overlay--analyze-typst
+  "Function to analyze the current buffer.
+Should return a `typst-overlay-analysis' struct.")
+
 
 ;; analyzer
 (cl-defstruct typst-overlay-code-node
@@ -164,7 +168,7 @@ Math nodes that appear after a parse error in the document are excluded."
   math-nodes
   first-error)
 
-(defun typst-overlay--analyze ()
+(defun typst-overlay--analyze-typst ()
   (let* ((root (treesit-buffer-root-node))
          (error-captures (treesit-query-capture root '((ERROR) @error)))
          (first-error (and error-captures
@@ -179,6 +183,24 @@ Math nodes that appear after a parse error in the document are excluded."
                   (typst-overlay--collect-math-nodes root first-error))
      :first-error first-error)))
 
+(defun typst-overlay--analyze-org ()
+  (let (math-nodes)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "\\$[^$\n]+\\$" nil t)
+        (let* ((beg (match-beginning 0))
+               (end (match-end 0))
+               (text (match-string-no-properties 0)))
+          (push (make-typst-overlay-math-node
+                 :beg beg
+                 :end end
+                 :text text
+                 :text-hash (md5 text))
+                math-nodes))))
+    (make-typst-overlay-analysis
+     :code-nodes nil
+     :math-nodes (typst-overlay--sort-math-nodes (nreverse math-nodes))
+     :first-error nil)))
 
 ;; snapshot
 (cl-defstruct typst-overlay-element
@@ -898,7 +920,7 @@ CALLBACK receives either the symbol `success' or `failure'.
   (typst-overlay--ensure-runtime)
   (let* ((old-snapshot (or typst-overlay--snapshot
                            (typst-overlay--empty-snapshot)))
-         (analysis (typst-overlay--analyze))
+         (analysis (funcall typst-overlay--analyzer))
          (new-snapshot (typst-overlay--make-snapshot analysis))
          (diff (typst-overlay--diff-snapshots old-snapshot new-snapshot))
          (generation (1+ (typst-overlay-registry-generation
@@ -927,6 +949,10 @@ Intended for use in `after-save-hook'."
 (defun typst-overlay--enable ()
   (unless (executable-find "typst")
     (user-error "typst not found in PATH."))
+  (setq-local typst-overlay--analyzer
+              (pcase major-mode
+                ('org-mode #'typst-overlay--analyze-org)
+                (_ #'typst-overlay--analyze-typst)))
   (typst-overlay--ensure-runtime)
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
   (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
