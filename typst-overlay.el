@@ -1,7 +1,8 @@
 ;;; typst-overlay.el --- Overlay Typst equations -*- lexical-binding: t; -*-
 
 ;; Author: Hesam Pakdaman
-;; Version: 0.1
+;; Maintainer: Hesam Pakdaman
+;; Version: 0.1.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: tools
 ;; URL: https://github.com/hesampakdaman/typst-overlay
