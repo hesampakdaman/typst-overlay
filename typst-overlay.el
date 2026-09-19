@@ -962,7 +962,6 @@ Intended for use in `after-save-hook'."
 
 (defun typst-overlay--disable ()
   (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
-  (remove-hook 'after-save-hook #'typst-overlay--after-save t)
   (remove-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (remove-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
   (typst-overlay--teardown))
