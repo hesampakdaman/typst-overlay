@@ -37,6 +37,11 @@
   :type 'natnum
   :group 'typst-overlay)
 
+(defcustom typst-overlay-extra-prelude ""
+  "Extra Typst code prepended to every rendered overlay element."
+  :type 'string
+  :group 'typst-overlay)
+
 ;; constants / buffer-local state
 (defvar-local typst-overlay--snapshot nil)
 (defvar-local typst-overlay--active-overlay nil)
@@ -189,15 +194,22 @@ Math nodes that appear after a parse error in the document are excluded."
   (let (math-nodes)
     (save-excursion
       (goto-char (point-min))
-      (while (re-search-forward "\\$[^$\n]+\\$" nil t)
-        (let* ((beg (match-beginning 0))
-               (end (match-end 0))
-               (text (match-string-no-properties 0)))
+      (while (re-search-forward
+             (concat "\\(\\$[^\n[:space:]]\\(?:[^$\n]*[^\n[:space:]]\\)?\\$" ; Inline math
+                     "\\|"
+                     "^[ \t]*\\$[ \t]*\n[^\0]*?\n[ \t]*\\$[ \t]*\\)") ; Display math
+             nil t)
+        (let* ((raw-beg (match-beginning 0))
+               (raw-end (match-end 0))
+               (text (match-string-no-properties 0))
+               (beg (if (string-prefix-p "\n" text) (1+ raw-beg) raw-beg))
+               (end (if (string-suffix-p "\n" text) (1- raw-end) raw-end))
+               (clean-text (string-trim text)))
           (push (make-typst-overlay-math-node
                  :beg beg
                  :end end
-                 :text text
-                 :text-hash (md5 text))
+                 :text clean-text
+                 :text-hash (md5 clean-text))
                 math-nodes))))
     (make-typst-overlay-analysis
      :code-nodes nil
@@ -682,6 +694,7 @@ Unchanged entries are no-op."
 
 (defun typst-overlay--post-command-update ()
   "Hide overlay under point and restore the previously active one."
+  (typst-overlay--handle-upward-entry)
   (let ((current (typst-overlay--overlay-at-point))
         (active typst-overlay--active-overlay))
     (unless (eq current active)
@@ -778,6 +791,9 @@ Unchanged entries are no-op."
      "#set page(width: auto, height: auto, margin: 1pt, fill: none)\n"
      "#set text(top-edge: \"bounds\", bottom-edge: \"bounds\")\n"
      "#set text(fill: rgb(\"#000000\"))\n"
+     (if (string-empty-p typst-overlay-extra-prelude)
+         ""
+       (concat typst-overlay-extra-prelude "\n"))
      prelude
      (unless (string-empty-p prelude) "\n\n")
      math
@@ -948,6 +964,22 @@ Intended for use in `after-save-hook'."
   (when typst-overlay-mode
     (typst-overlay-refresh)))
 
+(defvar-local typst-overlay--last-point nil
+  "Tracks previous point location to detect upward cursor movement into overlays.")
+
+(defun typst-overlay--handle-upward-entry ()
+  "Jump to overlay end if entering a `typst-overlay' from below."
+  (let ((curr-point (point)))
+    (when (and typst-overlay--last-point
+               (< curr-point typst-overlay--last-point)) ; Moving upwards
+      (let* ((overlays (overlays-at curr-point))
+             (typst-ov (cl-find-if (lambda (o) (overlay-get o 'typst-overlay)) overlays)))
+        (when typst-ov
+          (unless (and (>= typst-overlay--last-point (overlay-start typst-ov))
+                       (<= typst-overlay--last-point (overlay-end typst-ov)))
+            (goto-char (1- (overlay-end typst-ov)))))))
+    (setq typst-overlay--last-point curr-point)))
+
 (defun typst-overlay--enable ()
   (unless (executable-find "typst")
     (user-error "typst not found in PATH."))
@@ -956,6 +988,7 @@ Intended for use in `after-save-hook'."
                 ('org-mode #'typst-overlay--analyze-org)
                 (_ #'typst-overlay--analyze-typst)))
   (typst-overlay--ensure-runtime)
+  (setq typst-overlay--last-point (point))
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
   (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
@@ -965,6 +998,7 @@ Intended for use in `after-save-hook'."
   (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
   (remove-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (remove-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
+  (kill-local-variable 'typst-overlay--last-point)
   (typst-overlay--teardown))
 
 ;;;###autoload
