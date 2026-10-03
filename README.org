@@ -37,6 +37,7 @@ All options are available via =M-x customize-group RET typst-overlay=.
 | =typst-overlay-scale=               | =1.3=                  | Scale factor for rendered equations  |
 | =typst-overlay-cache-dir-name=      | =.typst-overlay-cache= | Directory name for cached SVG files  |
 | =typst-overlay-max-active-compiles= | =8=                    | Max concurrent compilation processes |
+| =typst-overlay-extra-prelude=       | =""=                   | Extra typst prelude code             |
 |-------------------------------------+------------------------+--------------------------------------|
 
 ** Contributing
