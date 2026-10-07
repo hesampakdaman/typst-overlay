@@ -931,7 +931,7 @@ CALLBACK receives either the symbol `success' or `failure'.
   (let* ((file (buffer-file-name))
          (dir (and file (file-name-directory file))))
     (unless dir
-      (error "typst-overlay requires a file-backed buffer"))
+      (error "A file-backed buffer is required"))
     (let ((cache-dir (expand-file-name typst-overlay-cache-dir-name dir)))
       (unless (file-directory-p cache-dir)
         (make-directory cache-dir t))
@@ -962,7 +962,7 @@ CALLBACK receives either the symbol `success' or `failure'.
   "Refresh Typst overlays for the current buffer."
   (interactive)
   (unless typst-overlay-mode
-    (user-error "typst-overlay-mode not active"))
+    (user-error "Mode typst-overlay-mode not active"))
   (typst-overlay--ensure-runtime)
   (let* ((old-snapshot (or typst-overlay--snapshot
                            (typst-overlay--empty-snapshot)))
@@ -1010,7 +1010,7 @@ Intended for use in `after-save-hook'."
 
 (defun typst-overlay--enable ()
   (unless (executable-find "typst")
-    (user-error "typst not found in PATH"))
+    (user-error "Binary typst not found in PATH"))
   (setq-local typst-overlay--analyzer
               (pcase major-mode
                 ('org-mode #'typst-overlay--analyze-org)
