@@ -15,6 +15,9 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'treesit)
+
+(defvar typst-overlay-mode)
 
 ;; customization
 (defgroup typst-overlay nil
