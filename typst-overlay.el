@@ -250,10 +250,13 @@ Math nodes that appear after a parse error in the document are excluded."
   cache-key)
 
 (defun typst-overlay--make-element (math-node prelude-code-nodes)
+  "Build an element from MATH-NODE and PRELUDE-CODE-NODES.
+The cache key also covers `typst-overlay-extra-prelude'."
   (let* ((text-hash (typst-overlay-math-node-text-hash math-node))
          (prelude-text (typst-overlay--build-prelude-text prelude-code-nodes))
          (prelude-hash (md5 prelude-text))
-         (cache-key (md5 (concat text-hash prelude-hash))))
+         (cache-key (md5 (concat text-hash prelude-hash
+                                 (md5 typst-overlay-extra-prelude)))))
     (make-typst-overlay-element
      :beg (typst-overlay-math-node-beg math-node)
      :end (typst-overlay-math-node-end math-node)
