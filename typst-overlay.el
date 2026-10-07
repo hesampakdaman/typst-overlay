@@ -1010,7 +1010,7 @@ Intended for use in `after-save-hook'."
 
 (defun typst-overlay--enable ()
   (unless (executable-find "typst")
-    (user-error "typst not found in PATH."))
+    (user-error "typst not found in PATH"))
   (setq-local typst-overlay--analyzer
               (pcase major-mode
                 ('org-mode #'typst-overlay--analyze-org)
