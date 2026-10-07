@@ -52,10 +52,9 @@
 (defvar-local typst-overlay--artifact-cache nil)
 (defvar-local typst-overlay--compile-queue nil)
 (defvar-local typst-overlay--active-compiles 0)
-(defvar-local typst-overlay-analyzer #'typst-overlay--analyze-typst
+(defvar-local typst-overlay--analyzer #'typst-overlay--analyze-typst
   "Function to analyze the current buffer.
 Should return a `typst-overlay-analysis' struct.")
-
 
 ;; analyzer
 (cl-defstruct typst-overlay-code-node
