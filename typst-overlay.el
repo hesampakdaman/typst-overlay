@@ -98,7 +98,7 @@ Should return a `typst-overlay-analysis' struct.")
   "Collect outermost code nodes in document order.
 
 We query all `code` nodes via tree-sitter, but this includes nested
-code blocks. We only want top-level (outermost) ones, since nested
+code blocks.  We only want top-level (outermost) ones, since nested
 code should not be treated as independent top-level code nodes.
 
 To enforce this, for each matched node we walk up its parent chain.
