@@ -149,6 +149,8 @@ returned in document order."
 (defun typst-overlay--collect-math-nodes (root first-error)
   "Collect math nodes that should be rendered (i.e. in content, not code).
 
+ROOT is the tree-sitter root node. Math at or after FIRST-ERROR is skipped.
+
 We query all `math` nodes via tree-sitter. However, math can appear
 both in normal document content and inside `code` blocks. We only want
 math that is part of rendered content.
