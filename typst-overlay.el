@@ -361,15 +361,15 @@ We then walk NEW elements in document order and try to consume
 one matching OLD element from the corresponding queue:
 
 - If a match is found:
-  - same position → 'unchanged
-  - different position → 'moved
+  - same position → unchanged
+  - different position → moved
   The matched OLD element is removed from the queue.
 
 - If no match is found:
-  → 'added
+  → added
 
 After processing all NEW elements, any OLD elements left in the
-queues were not matched and are therefore 'deleted.
+queues were not matched and are therefore deleted.
 
 The resulting diff contains:
 - `entries`: ordered like NEW-SNAPSHOT
