@@ -1,15 +1,36 @@
 ;;; typst-overlay.el --- Overlay Typst equations -*- lexical-binding: t; -*-
 
-;; Author: Hesam Pakdaman
-;; Maintainer: Hesam Pakdaman
+;; Author: Hesam Pakdaman <https://github.com/hesampakdaman>
+;; Maintainer: Hesam Pakdaman <https://github.com/hesampakdaman>
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: tools
 ;; URL: https://github.com/hesampakdaman/typst-overlay
 ;; Assisted-by: Claude:claude-sonnet-4-6
 
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
 ;;; Commentary:
-;; Brief description
+
+;; typst-overlay renders Typst math equations as inline overlays.
+;; Equations are compiled asynchronously to SVG with the `typst'
+;; compiler and displayed over the source text.  The overlay is hidden
+;; while point is inside an equation, so you can edit the raw source,
+;; and restored when point leaves.
+;;
+;; Supported buffers: `typst-ts-mode' (via tree-sitter) and `org-mode'
+;; (where $...$ is treated as Typst math).
+;;
+;; Usage:
+;;
+;;   M-x typst-overlay-mode      enable in the current buffer
+;;   M-x typst-overlay-refresh   re-render overlays manually
+;;
+;; To refresh on save, add `typst-overlay-save-refresh' to
+;; `after-save-hook'.
+;;
+;; Requires the `typst' executable on PATH.  See `customize-group'
+;; `typst-overlay' for options.
 
 ;;; Code:
 (require 'cl-lib)
