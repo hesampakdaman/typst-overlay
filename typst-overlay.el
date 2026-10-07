@@ -379,7 +379,7 @@ The result is returned in document order."
 (defun typst-overlay--diff-snapshots (old-snapshot new-snapshot)
   "Compute diff from OLD-SNAPSHOT to NEW-SNAPSHOT.
 
-Elements are matched by `cache-key` (render identity). Because
+Elements are matched by `cache-key` (render identity).  Because
 multiple elements may share the same cache-key, OLD elements are
 grouped into queues (one queue per cache-key).
 
@@ -515,7 +515,8 @@ GENERATION is the generation to stamp onto the returned plan."
    :old old-element))
 
 (defun typst-overlay--plan-place-ops (diff registry artifact-cache)
-  "Build place ops for entries that can reuse an existing artifact.
+  "Build place ops from DIFF, REGISTRY and ARTIFACT-CACHE.
+Covers entries that can reuse an existing artifact.
 
 Cases:
 - moved + old record has artifact            -> place-op
@@ -565,7 +566,8 @@ Cases:
     (nreverse ops)))
 
 (defun typst-overlay--plan-render-ops (diff registry artifact-cache)
-  "Build render ops for entries that do not have a reusable artifact.
+  "Build render ops from DIFF, REGISTRY and ARTIFACT-CACHE.
+Covers entries that do not have a reusable artifact.
 
 Cases:
 - moved + old record has no artifact -> render-op
@@ -611,13 +613,14 @@ Unchanged entries are no-op."
     (nreverse ops)))
 
 (defun typst-overlay--get-record (registry element)
-  "Return the registry record for ELEMENT, or nil if none exists."
+  "Return the record for ELEMENT in REGISTRY, or nil if none exists."
   (gethash (typst-overlay--occurrence-key element)
            (typst-overlay-registry-records registry)))
 
 ;; render
 (defun typst-overlay--apply-render-plan (plan registry artifact-cache)
-  "Apply PLAN by mutating REGISTRY and runtime state."
+  "Apply PLAN by mutating REGISTRY and runtime state.
+ARTIFACT-CACHE is passed on when starting renders."
   (let ((generation (typst-overlay-render-plan-generation plan)))
     (dolist (op (typst-overlay-render-plan-delete plan))
       (typst-overlay--apply-delete-op op registry))
@@ -628,7 +631,7 @@ Unchanged entries are no-op."
     (setf (typst-overlay-registry-generation registry) generation)))
 
 (defun typst-overlay--apply-delete-op (op registry)
-  "Apply delete OP by removing overlay and record for the old occurrence."
+  "Apply delete OP by removing overlay and record from REGISTRY."
   (let* ((old-element (typst-overlay-delete-op-old op))
          (record (typst-overlay--get-record registry old-element)))
     (when record
@@ -636,7 +639,8 @@ Unchanged entries are no-op."
       (typst-overlay--remove-record registry old-element))))
 
 (defun typst-overlay--apply-place-op (op registry generation)
-  "Apply place OP by making NEW visible from an existing ARTIFACT."
+  "Apply place OP by making its new element visible in REGISTRY.
+GENERATION stamps the record so stale async results can be ignored."
   (let* ((old-element (typst-overlay-place-op-old op))
          (new-element (typst-overlay-place-op-new op))
          (artifact (typst-overlay-place-op-artifact op))
@@ -657,7 +661,9 @@ Unchanged entries are no-op."
     (typst-overlay--put-record registry new-element record)))
 
 (defun typst-overlay--apply-render-op (op registry generation artifact-cache)
-  "Apply render OP by registering NEW as rendering and starting async render."
+  "Apply render OP by registering its new element in REGISTRY.
+Start an async render stamped with GENERATION.  ARTIFACT-CACHE receives
+the result."
   (let* ((old-element (typst-overlay-render-op-old op))
          (new-element (typst-overlay-render-op-new op))
          (record (and old-element
@@ -677,18 +683,18 @@ Unchanged entries are no-op."
     (typst-overlay--start-render-for-element new-element generation artifact-cache)))
 
 (defun typst-overlay--put-record (registry element record)
-  "Store RECORD in REGISTRY for ELEMENT's occurrence key."
+  "Store RECORD for ELEMENT occurrence key in REGISTRY."
   (puthash (typst-overlay--occurrence-key element)
            record
            (typst-overlay-registry-records registry)))
 
 (defun typst-overlay--remove-record (registry element)
-  "Remove REGISTRY entry for ELEMENT's occurrence key."
+  "Remove ELEMENT occurrence key entry from REGISTRY."
   (remhash (typst-overlay--occurrence-key element)
            (typst-overlay-registry-records registry)))
 
 (defun typst-overlay--delete-record-overlay (record)
-  "Delete RECORD's live overlay, if any, and clear the slot."
+  "Delete RECORD live overlay, if any, and clear the slot."
   (let ((overlay (typst-overlay-record-overlay record)))
     (when overlay
       (delete-overlay overlay)
@@ -839,7 +845,8 @@ Unchanged entries are no-op."
       (funcall thunk))))
 
 (defun typst-overlay--start-render-for-element (element generation artifact-cache)
-  "Start async render for ELEMENT at GENERATION, respecting concurrency limit."
+  "Start async render for ELEMENT at GENERATION.
+ARTIFACT-CACHE receives the result.  Respects the concurrency limit."
   (let* ((buffer (current-buffer))
          (file (buffer-file-name buffer))
          (default-directory (if file
@@ -870,6 +877,7 @@ Unchanged entries are no-op."
 (defun typst-overlay--start-async-compile
     (source svg-path element callback)
   "Compile SOURCE to SVG-PATH asynchronously, then call CALLBACK.
+ELEMENT is the element being rendered, used to name the error buffer.
 CALLBACK receives either the symbol `success' or `failure'.
 `default-directory' must be bound by the caller to resolve #import paths."
   (let ((buffer (generate-new-buffer " *typst-overlay-compile*")))
@@ -903,7 +911,8 @@ CALLBACK receives either the symbol `success' or `failure'.
 
 (defun typst-overlay--handle-render-success
     (element generation cache-key svg-path artifact-cache)
-  "Commit successful render for ELEMENT if its record is still current."
+"Commit successful render for ELEMENT if GENERATION is still current.
+CACHE-KEY, SVG-PATH and ARTIFACT-CACHE describe the new artifact."
   (when typst-overlay-mode
     (let* ((record (typst-overlay--get-record typst-overlay--registry element))
            (artifact (make-typst-overlay-artifact
@@ -919,7 +928,7 @@ CALLBACK receives either the symbol `success' or `failure'.
               (typst-overlay--place-artifact-overlay element artifact))))))
 
 (defun typst-overlay--handle-render-failure (element generation)
-  "Mark ELEMENT failed if its record is still current."
+  "Mark ELEMENT failed if its record still matches GENERATION."
   (when typst-overlay-mode
     (let ((record (typst-overlay--get-record typst-overlay--registry element)))
       (when (and record
