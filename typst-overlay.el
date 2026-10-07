@@ -348,13 +348,13 @@ The result is returned in document order."
     table))
 
 (defun typst-overlay--find-old-match (new-element old-queues)
-  "Return first unmatched old element for NEW-ELEMENT, or nil."
+  "Return first unmatched old element for NEW-ELEMENT in OLD-QUEUES, or nil."
   (let* ((cache-key (typst-overlay-element-cache-key new-element))
          (queue (gethash cache-key old-queues)))
     (car queue)))
 
 (defun typst-overlay--consume-old-match (element old-queues)
-  "Consume one unmatched old element with the same cache-key as ELEMENT."
+  "Consume one unmatched old element with ELEMENT's cache-key from OLD-QUEUES."
   (let* ((cache-key (typst-overlay-element-cache-key element))
          (queue (gethash cache-key old-queues)))
     ;; Drop the first unmatched old element from the queue.
