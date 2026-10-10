@@ -320,6 +320,43 @@ texts with an artifact in the cache, and NEW the current elements.")
                                (typst-overlay-test--artifact-cache cached)
                                2)))))))))
 
+;;; Async placement
+
+;; While an equation compiles, the buffer may be edited.  Each case is
+;; (NAME EDIT EXPECTED): EDIT is (insert POS STRING), (delete BEG END)
+;; or nil, applied to "Text $a + b$ end." after the render started.
+;; EXPECTED is where the result is placed, (BEG . END), or nil if the
+;; equation's text changed.
+
+(defconst typst-overlay-test--relocate-cases
+  '(("no edit" nil (6 . 13))
+    ("typed before the line" (insert 1 "INSERTED ") (15 . 22))
+    ("typed right before $" (insert 6 "XX") (8 . 15))
+    ("typed right after $" (insert 13 "YY") (6 . 13))
+    ("typed after the equation" (insert 17 "!") (6 . 13))
+    ("deleted text before" (delete 1 6) (1 . 8))
+    ("edited inside" (insert 12 " + c") nil)
+    ("deleted the equation" (delete 6 13) nil))
+  "Relocation cases: (NAME EDIT EXPECTED).")
+
+(ert-deftest typst-overlay-test-relocate ()
+  "A finished render is placed where its equation is now."
+  (dolist (case typst-overlay-test--relocate-cases)
+    (pcase-let ((`(,name ,edit ,expected) case))
+      (with-temp-buffer
+        (insert "Text $a + b$ end.")
+        (let* ((element (typst-overlay-test--element 6 "$a + b$"))
+               (markers (typst-overlay--element-markers element)))
+          (pcase edit
+            (`(insert ,pos ,string) (goto-char pos) (insert string))
+            (`(delete ,beg ,end) (delete-region beg end)))
+          (let ((current (typst-overlay--relocate-element element markers)))
+            (should (equal (list name expected)
+                           (list name
+                                 (and current
+                                      (cons (typst-overlay-element-beg current)
+                                            (typst-overlay-element-end current))))))))))))
+
 (provide 'typst-overlay-test)
 
 ;;; typst-overlay-test.el ends here

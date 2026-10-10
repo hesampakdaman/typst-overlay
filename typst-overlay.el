@@ -956,16 +956,24 @@ ARTIFACT-CACHE receives the result.  Respects the concurrency limit."
          (cache-key (typst-overlay-element-cache-key element))
          (svg-path (typst-overlay--artifact-svg-path cache-key))
          (source (typst-overlay--build-element-source element))
+         ;; Markers follow edits made while the compile runs, so the
+         ;; result can be placed where the equation is by then.
+         (markers (typst-overlay--element-markers element))
          (callback (lambda (status)
                      (when (buffer-live-p buffer)
                        (with-current-buffer buffer
-                         (cl-decf typst-overlay--active-compiles)
-                         (typst-overlay--drain-compile-queue)
-                         (if (eq status 'success)
-                             (typst-overlay--handle-render-success
-                              element generation cache-key svg-path artifact-cache)
-                           (typst-overlay--handle-render-failure
-                            element generation)))))))
+                         (let ((current (typst-overlay--relocate-element
+                                         element markers)))
+                           (set-marker (car markers) nil)
+                           (set-marker (cdr markers) nil)
+                           (cl-decf typst-overlay--active-compiles)
+                           (typst-overlay--drain-compile-queue)
+                           (if (eq status 'success)
+                               (typst-overlay--handle-render-success
+                                element current generation
+                                cache-key svg-path artifact-cache)
+                             (typst-overlay--handle-render-failure
+                              element generation))))))))
     (if (< typst-overlay--active-compiles typst-overlay-max-active-compiles)
         (progn
           (cl-incf typst-overlay--active-compiles)
@@ -1010,9 +1018,31 @@ CALLBACK receives either the symbol `success' or `failure'.
       (process-send-eof proc)
       proc)))
 
+(defun typst-overlay--element-markers (element)
+  "Return markers (BEG . END) around ELEMENT that follow later edits.
+Text typed right before or after ELEMENT stays outside the markers."
+  (cons (copy-marker (typst-overlay-element-beg element) t)
+        (copy-marker (typst-overlay-element-end element))))
+
+(defun typst-overlay--relocate-element (element markers)
+  "Return ELEMENT at its current position, or nil if its text changed.
+MARKERS is a (BEG . END) pair from `typst-overlay--element-markers',
+made when ELEMENT's render started."
+  (let ((beg (marker-position (car markers)))
+        (end (marker-position (cdr markers))))
+    (when (and beg end
+               (string= (buffer-substring-no-properties beg end)
+                        (typst-overlay-element-text element)))
+      (let ((current (copy-typst-overlay-element element)))
+        (setf (typst-overlay-element-beg current) beg
+              (typst-overlay-element-end current) end)
+        current))))
+
 (defun typst-overlay--handle-render-success
-    (element generation cache-key svg-path artifact-cache)
-"Commit successful render for ELEMENT if GENERATION is still current.
+    (element current generation cache-key svg-path artifact-cache)
+  "Commit successful render for ELEMENT if GENERATION is still current.
+CURRENT is ELEMENT at its position now, or nil if its text changed
+while compiling; then the artifact is kept for the next refresh.
 CACHE-KEY, SVG-PATH and ARTIFACT-CACHE describe the new artifact."
   (when typst-overlay-mode
     (let* ((record (typst-overlay--get-record typst-overlay--registry element))
@@ -1023,10 +1053,13 @@ CACHE-KEY, SVG-PATH and ARTIFACT-CACHE describe the new artifact."
       (when (and record
                  (= (typst-overlay-record-generation record) generation))
         (typst-overlay--delete-record-overlay record)
-        (setf (typst-overlay-record-state record) 'visible
-              (typst-overlay-record-artifact record) artifact
-              (typst-overlay-record-overlay record)
-              (typst-overlay--place-artifact-overlay element artifact))))))
+        (setf (typst-overlay-record-artifact record) artifact)
+        (if current
+            (setf (typst-overlay-record-state record) 'visible
+                  (typst-overlay-record-overlay record)
+                  (typst-overlay--place-artifact-overlay current artifact))
+          (setf (typst-overlay-record-state record) 'stale
+                (typst-overlay-record-overlay record) nil))))))
 
 (defun typst-overlay--handle-render-failure (element generation)
   "Mark ELEMENT failed if its record still matches GENERATION."
