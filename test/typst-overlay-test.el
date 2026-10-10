@@ -165,7 +165,6 @@ Return the `user-error' message and whether the mode stayed on."
 (defun typst-overlay-test--snapshot (specs)
   "Return a snapshot of elements built from SPECS, a list of (BEG TEXT)."
   (make-typst-overlay-snapshot
-   :version 0
    :elements (mapcar (lambda (spec)
                        (typst-overlay-test--element (nth 0 spec) (nth 1 spec)))
                      specs)))
@@ -432,6 +431,40 @@ texts with an artifact in the cache, and NEW the current elements.")
       (should (equal (reverse shown)
                      '("Typst: unknown variable: ac"
                        "Typst: unknown variable: ac"))))))
+
+;;; Compile bookkeeping
+
+(defmacro typst-overlay-test--with-fake-compiles (callbacks &rest body)
+  "Run BODY with compiles faked; started callbacks are pushed to CALLBACKS."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'typst-overlay--start-async-compile)
+              (lambda (_source _svg-path callback) (push callback ,callbacks)))
+             ((symbol-function 'typst-overlay--artifact-svg-path)
+              (lambda (_key) "unused.svg")))
+     ,@body))
+
+(ert-deftest typst-overlay-test-compile-count ()
+  "Compiles finishing after a teardown do not corrupt the count."
+  (with-temp-buffer
+    (insert "Text $a$ end.")
+    (setq-local typst-overlay-mode t)
+    (let ((element (typst-overlay-test--element 6 "$a$"))
+          callbacks)
+      (typst-overlay-test--with-fake-compiles callbacks
+        ;; A compile finishing normally brings the count back to 0.
+        (typst-overlay--ensure-runtime)
+        (typst-overlay--start-render-for-element
+         element 1 typst-overlay--artifact-cache)
+        (should (= typst-overlay--active-compiles 1))
+        (funcall (pop callbacks) 'failure "")
+        (should (= typst-overlay--active-compiles 0))
+        ;; One finishing after a teardown is ignored.
+        (typst-overlay--start-render-for-element
+         element 1 typst-overlay--artifact-cache)
+        (typst-overlay--teardown)
+        (typst-overlay--ensure-runtime)
+        (funcall (pop callbacks) 'failure "")
+        (should (= typst-overlay--active-compiles 0))))))
 
 (provide 'typst-overlay-test)
 

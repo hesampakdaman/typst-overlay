@@ -89,6 +89,8 @@
 (defvar-local typst-overlay--artifact-cache nil)
 (defvar-local typst-overlay--compile-queue nil)
 (defvar-local typst-overlay--active-compiles 0)
+(defvar-local typst-overlay--session 0
+  "Incremented on teardown, so compiles started before it are ignored.")
 (defvar-local typst-overlay--analyzer #'typst-overlay--analyze-typst
   "Function to analyze the current buffer.
 Should return a `typst-overlay-analysis' struct.")
@@ -373,7 +375,6 @@ The cache key also covers `typst-overlay-extra-prelude'."
   (mapconcat #'typst-overlay-code-node-text code-nodes "\n\n"))
 
 (cl-defstruct typst-overlay-snapshot
-  version
   elements       ;; ordered list of typst-overlay-element
   code-nodes
   math-nodes)
@@ -415,7 +416,6 @@ Each math node becomes an element paired with its prelude code."
                math-node prelude-nodes)))
         (push element elements)))
     (make-typst-overlay-snapshot
-     :version (float-time)
      :elements (nreverse elements)
      :code-nodes code-nodes
      :math-nodes math-nodes)))
@@ -925,6 +925,7 @@ The message is shown once per entry, not after every command."
   "Remove overlays and clear buffer-local runtime state."
   (setq typst-overlay--compile-queue nil
         typst-overlay--active-compiles 0)
+  (cl-incf typst-overlay--session)
   (when (overlayp typst-overlay--active-overlay)
     (typst-overlay--show-overlay typst-overlay--active-overlay))
   (setq typst-overlay--active-overlay nil
@@ -980,6 +981,7 @@ ARTIFACT-CACHE receives the result.  Respects the concurrency limit."
          ;; Markers follow edits made while the compile runs, so the
          ;; result can be placed where the equation is by then.
          (markers (typst-overlay--element-markers element))
+         (session typst-overlay--session)
          (callback (lambda (status output)
                      (when (buffer-live-p buffer)
                        (with-current-buffer buffer
@@ -987,14 +989,17 @@ ARTIFACT-CACHE receives the result.  Respects the concurrency limit."
                                          element markers)))
                            (set-marker (car markers) nil)
                            (set-marker (cdr markers) nil)
-                           (cl-decf typst-overlay--active-compiles)
-                           (typst-overlay--drain-compile-queue)
-                           (if (eq status 'success)
-                               (typst-overlay--handle-render-success
-                                element current generation
-                                cache-key svg-path artifact-cache)
-                             (typst-overlay--handle-render-failure
-                              element current generation output))))))))
+                           ;; Ignore compiles from before a teardown: their
+                           ;; count and state were already reset.
+                           (when (= session typst-overlay--session)
+                             (cl-decf typst-overlay--active-compiles)
+                             (typst-overlay--drain-compile-queue)
+                             (if (eq status 'success)
+                                 (typst-overlay--handle-render-success
+                                  element current generation
+                                  cache-key svg-path artifact-cache)
+                               (typst-overlay--handle-render-failure
+                                element current generation output)))))))))
     (if (< typst-overlay--active-compiles typst-overlay-max-active-compiles)
         (progn
           (cl-incf typst-overlay--active-compiles)
@@ -1143,7 +1148,6 @@ is shown when point enters the equation."
 (defun typst-overlay--empty-snapshot ()
   "Return an empty snapshot."
   (make-typst-overlay-snapshot
-   :version 0
    :elements nil
    :code-nodes nil
    :math-nodes nil))
