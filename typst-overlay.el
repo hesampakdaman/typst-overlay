@@ -322,16 +322,21 @@ equation follows it."
         (while (search-forward "$" nil t)
           (let* ((beg (1- (point)))
                  (limit (typst-overlay--paragraph-end))
-                 (end (and (not (typst-overlay--escaped-p beg))
-                           (not (typst-overlay--literal-p beg))
-                           (not (typst-overlay--math-end beg limit))
+                 (candidate (and (not (typst-overlay--escaped-p beg))
+                                 (not (typst-overlay--literal-p beg))))
+                 (clean (and candidate (typst-overlay--math-end beg limit)))
+                 (end (and candidate (not clean)
                            (typst-overlay--find-closing limit))))
-            (if (not end)
-                (goto-char (1+ beg))
+            (cond
+             ;; Skip clean math whole, so its closing $ is not taken
+             ;; for an opening one.
+             (clean (goto-char clean))
+             (end
               (let ((original (buffer-substring beg end)))
                 (delete-region beg end)
                 (insert (replace-regexp-in-string "[^\n]" " " original))
-                (throw 'found (cons beg end))))))))))
+                (throw 'found (cons beg end))))
+             (t (goto-char (1+ beg))))))))))
 
 (defconst typst-overlay--org-code-types
   '(src-block example-block export-block fixed-width comment comment-block

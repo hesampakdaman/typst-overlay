@@ -129,6 +129,9 @@ The case name is part of the compared value so failures show it."
     ("dollars in raw text are not blamed"
      "= A\n\nRaw `$ \"x $` here.\n\nBroken $frac(1, 2$.\n\nAfter $b$.\n"
      ("$frac(1, 2$" "$b$"))
+    ("clean math before a broken equation is skipped whole"
+     "= A\n\n#let r = $b$\n#let n(x) = $x$\n\nBroken $frac(1, 2$.\n\nAfter $c$.\n"
+     ("$frac(1, 2$" "$c$"))
     ("code still recognised after a broken equation"
      "Broken $frac(1, 2$.\n\n#let f = $a$\n\nAfter $b$.\n"
      ("$frac(1, 2$" "$b$"))
