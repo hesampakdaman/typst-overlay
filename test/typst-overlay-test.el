@@ -362,6 +362,9 @@ texts with an artifact in the cache, and NEW the current elements.")
   '(("real typst output"
      "error: unknown variable: ac\n  ┌─ <stdin>:4:1\n  │\n4 │ $ac$\n  │  ^^\n  │\n  = hint: try adding spaces between each letter: `a c`\n"
      "unknown variable: ac")
+    ("short diagnostic format"
+     "<stdin>:5:3: error: unknown variable: ac\n"
+     "unknown variable: ac")
     ("warning before the error"
      "warning: unused import\nerror: expected expression\n"
      "expected expression")
@@ -394,7 +397,7 @@ texts with an artifact in the cache, and NEW the current elements.")
       ;; Current generation: marked failed and underlined.
       (setq typst-overlay--registry (typst-overlay-test--failed-record element 1))
       (typst-overlay--handle-render-failure
-       element element 1 "error: unknown variable: ac\n")
+       element element 1 "unknown variable: ac")
       (let* ((record (typst-overlay--get-record typst-overlay--registry element))
              (overlay (typst-overlay-record-overlay record)))
         (should (eq (typst-overlay-record-state record) 'failed))
@@ -406,12 +409,12 @@ texts with an artifact in the cache, and NEW the current elements.")
       ;; Text changed while compiling: failed, but nothing to underline.
       (remove-overlays)
       (setq typst-overlay--registry (typst-overlay-test--failed-record element 1))
-      (typst-overlay--handle-render-failure element nil 1 "error: x\n")
+      (typst-overlay--handle-render-failure element nil 1 "x")
       (should-not (typst-overlay-record-overlay
                    (typst-overlay--get-record typst-overlay--registry element)))
       ;; Outdated generation: left alone.
       (setq typst-overlay--registry (typst-overlay-test--failed-record element 2))
-      (typst-overlay--handle-render-failure element element 1 "error: x\n")
+      (typst-overlay--handle-render-failure element element 1 "x")
       (should (eq (typst-overlay-record-state
                    (typst-overlay--get-record typst-overlay--registry element))
                   'rendering)))))
@@ -432,39 +435,165 @@ texts with an artifact in the cache, and NEW the current elements.")
                      '("Typst: unknown variable: ac"
                        "Typst: unknown variable: ac"))))))
 
-;;; Compile bookkeeping
+;;; Batch compile
 
-(defmacro typst-overlay-test--with-fake-compiles (callbacks &rest body)
-  "Run BODY with compiles faked; started callbacks are pushed to CALLBACKS."
-  (declare (indent 1))
-  `(cl-letf (((symbol-function 'typst-overlay--start-async-compile)
-              (lambda (_source _svg-path callback) (push callback ,callbacks)))
-             ((symbol-function 'typst-overlay--artifact-svg-path)
-              (lambda (_key) "unused.svg")))
-     ,@body))
+(ert-deftest typst-overlay-test-batch-source ()
+  "Each job's recorded lines match its block in the batch source."
+  (let ((typst-overlay-extra-prelude "#let k = 1")
+        (jobs (list (make-typst-overlay-job
+                     :element (typst-overlay--make-element
+                               (make-typst-overlay-math-node
+                                :beg 1 :end 4 :text "$a$" :text-hash (md5 "$a$"))
+                               (list (make-typst-overlay-code-node
+                                      :beg 1 :end 2 :text "#let f = 2" :hash ""))))
+                    (make-typst-overlay-job
+                     :element (typst-overlay-test--element 10 "$\nb\n$")))))
+    (pcase-let* ((`(,source . ,lines) (typst-overlay--batch-source jobs))
+                 (source-lines (vconcat (split-string source "\n"))))
+      (cl-flet ((line (n) (aref source-lines (1- n))))
+        (should (= (length lines) 2))
+        (pcase-let ((`(,first ,second) lines))
+          (should (equal (line (typst-overlay-job-lines-beg first)) "#["))
+          (should (equal (line (typst-overlay-job-lines-prelude-end first))
+                         "#let f = 2"))
+          (should (equal (line (typst-overlay-job-lines-end first)) "]"))
+          (should (equal (line (1+ (typst-overlay-job-lines-end first)))
+                         "#pagebreak()"))
+          (should (equal (line (typst-overlay-job-lines-prelude-end second))
+                         "#let k = 1"))
+          (should (equal (line (1- (typst-overlay-job-lines-end second))) "$"))
+          (should (equal (line (typst-overlay-job-lines-end second)) "]")))))))
 
-(ert-deftest typst-overlay-test-compile-count ()
-  "Compiles finishing after a teardown do not corrupt the count."
-  (with-temp-buffer
-    (insert "Text $a$ end.")
-    (setq-local typst-overlay-mode t)
-    (let ((element (typst-overlay-test--element 6 "$a$"))
-          callbacks)
-      (typst-overlay-test--with-fake-compiles callbacks
-        ;; A compile finishing normally brings the count back to 0.
-        (typst-overlay--ensure-runtime)
-        (typst-overlay--start-render-for-element
-         element 1 typst-overlay--artifact-cache)
-        (should (= typst-overlay--active-compiles 1))
-        (funcall (pop callbacks) 'failure "")
-        (should (= typst-overlay--active-compiles 0))
-        ;; One finishing after a teardown is ignored.
-        (typst-overlay--start-render-for-element
-         element 1 typst-overlay--artifact-cache)
-        (typst-overlay--teardown)
-        (typst-overlay--ensure-runtime)
-        (funcall (pop callbacks) 'failure "")
-        (should (= typst-overlay--active-compiles 0))))))
+(defun typst-overlay-test--page-count (source)
+  "Return how many pages SOURCE produces."
+  (let ((count 1) (start 0))
+    (while (string-match "^#pagebreak()$" source start)
+      (cl-incf count)
+      (setq start (match-end 0)))
+    count))
+
+(defun typst-overlay-test--error-at (marker message)
+  "Return a fake typst that fails at the first line containing MARKER.
+MESSAGE is the error it reports there."
+  (lambda (source)
+    (let ((index (cl-position-if (lambda (line) (string-search marker line))
+                                 (split-string source "\n"))))
+      (and index (format "<stdin>:%d:1: error: %s\n" (1+ index) message)))))
+
+(defmacro typst-overlay-test--with-batches (text behavior &rest body)
+  "Enable the mode on an org file with TEXT, compiling with a fake typst.
+BEHAVIOR is called with each batch source and returns nil to succeed
+or typst's error output to fail.  Within BODY, `run-compiles' runs
+pending compiles until none are left, and `batches' lists the page
+counts of every compile started, in order."
+  (declare (indent 2))
+  `(let ((dir (make-temp-file "typst-overlay-test-" t))
+         (pending nil)
+         (batches nil)
+         (behavior ,behavior))
+     (unwind-protect
+         (cl-letf (((symbol-function 'executable-find)
+                    (lambda (&rest _) "/usr/bin/typst"))
+                   ((symbol-function 'typst-overlay--compile-async)
+                    (lambda (source out callback)
+                      (setq batches (append batches
+                                            (list (typst-overlay-test--page-count
+                                                   source))))
+                      (setq pending (append pending
+                                            (list (list source out callback)))))))
+           (with-temp-buffer
+             (setq buffer-file-name (expand-file-name "test.org" dir))
+             (insert ,text)
+             (org-mode)
+             (cl-flet ((run-compiles ()
+                         (while pending
+                           (pcase-let* ((`(,source ,out ,callback) (pop pending))
+                                        (output (funcall behavior source)))
+                             (unless output
+                               (dotimes (i (typst-overlay-test--page-count source))
+                                 (with-temp-file (expand-file-name
+                                                  (format "%d.svg" (1+ i)) out)
+                                   (insert "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>"))))
+                             (funcall callback (null output) (or output ""))))))
+               (typst-overlay-mode 1)
+               ,@body
+               (set-buffer-modified-p nil))))
+       (delete-directory dir t))))
+
+(defun typst-overlay-test--equations (n)
+  "Return org text with N different equations, one per line."
+  (mapconcat (lambda (i) (format "Line $x_%d$ here." i))
+             (number-sequence 1 n) "\n"))
+
+(defun typst-overlay-test--overlays (property)
+  "Return the texts covered by overlays with PROPERTY, in order."
+  (mapcar (lambda (overlay)
+            (buffer-substring-no-properties (overlay-start overlay)
+                                            (overlay-end overlay)))
+          (sort (seq-filter (lambda (overlay) (overlay-get overlay property))
+                            (overlays-in (point-min) (point-max)))
+                (lambda (a b) (< (overlay-start a) (overlay-start b))))))
+
+(ert-deftest typst-overlay-test-batch-split ()
+  "Equations are spread evenly over at most the compile limit."
+  (skip-unless (treesit-language-available-p 'typst))
+  (let ((typst-overlay-max-active-compiles 8))
+    (typst-overlay-test--with-batches (typst-overlay-test--equations 20) #'ignore
+      (should (equal batches '(3 3 3 3 3 3 2)))
+      (run-compiles)
+      (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 20))
+      (should (= typst-overlay--active-compiles 0)))
+    (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
+      (should (equal batches '(1))))))
+
+(ert-deftest typst-overlay-test-batch-broken-equation ()
+  "A broken equation fails on its own; the rest of its batch is retried."
+  (skip-unless (treesit-language-available-p 'typst))
+  (let ((typst-overlay-max-active-compiles 8))
+    (typst-overlay-test--with-batches
+        (replace-regexp-in-string "x_5" "BAD" (typst-overlay-test--equations 20))
+        (typst-overlay-test--error-at "BAD" "unknown variable: BAD")
+      (run-compiles)
+      ;; Equation 5 is in the second batch of 3, retried as a batch of 2.
+      (should (equal batches '(3 3 3 3 3 3 2 2)))
+      (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 19))
+      (should (equal (typst-overlay-test--overlays 'typst-overlay-error) '("$BAD$")))
+      (should (equal (overlay-get (car (overlays-at (1+ (string-search "$BAD$" (buffer-string)))))
+                                  'typst-overlay-error)
+                     "unknown variable: BAD")))))
+
+(ert-deftest typst-overlay-test-batch-broken-prelude ()
+  "A broken prelude fails every equation sharing it, without retries."
+  (skip-unless (treesit-language-available-p 'typst))
+  (let ((typst-overlay-max-active-compiles 8)
+        (typst-overlay-extra-prelude "#import \"BROKEN.typ\": *"))
+    (typst-overlay-test--with-batches (typst-overlay-test--equations 20)
+        (typst-overlay-test--error-at "BROKEN" "file not found")
+      (run-compiles)
+      (should (equal batches '(3 3 3 3 3 3 2)))
+      (should (= (length (typst-overlay-test--overlays 'typst-overlay-error)) 20)))))
+
+(ert-deftest typst-overlay-test-batch-untraceable-error ()
+  "An error without a location falls back to one compile per equation."
+  (skip-unless (treesit-language-available-p 'typst))
+  (let ((typst-overlay-max-active-compiles 2))
+    (typst-overlay-test--with-batches (typst-overlay-test--equations 4)
+        (lambda (source)
+          (and (> (typst-overlay-test--page-count source) 1) "error: boom\n"))
+      (run-compiles)
+      (should (equal batches '(2 2 1 1 1 1)))
+      (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 4)))))
+
+(ert-deftest typst-overlay-test-batch-after-teardown ()
+  "Batches finishing after the mode is turned off change nothing."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches (typst-overlay-test--equations 3) #'ignore
+    (typst-overlay-mode -1)
+    (typst-overlay-mode 1)
+    (run-compiles)
+    (should (= typst-overlay--active-compiles 0))
+    ;; Only the second enable's compiles placed overlays, once each.
+    (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 3))))
 
 (provide 'typst-overlay-test)
 
