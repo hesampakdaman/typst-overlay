@@ -88,6 +88,7 @@ Should return a `typst-overlay-analysis' struct.")
   hash)
 
 (defun typst-overlay--make-code-node (node)
+  "Return a `typst-overlay-code-node' for the tree-sitter NODE."
   (let* ((beg (treesit-node-start node))
          (end (treesit-node-end node))
          (text (buffer-substring-no-properties beg end)))
@@ -128,6 +129,7 @@ returned in document order."
     (nreverse result)))
 
 (defun typst-overlay--sort-code-nodes (nodes)
+  "Sort code NODES by buffer position."
   (sort nodes
         (lambda (a b)
           (< (typst-overlay-code-node-beg a)
@@ -140,6 +142,7 @@ returned in document order."
   text-hash)
 
 (defun typst-overlay--make-math-node (node)
+  "Return a `typst-overlay-math-node' for the tree-sitter NODE."
   (let* ((beg (treesit-node-start node))
          (end (treesit-node-end node))
          (text (buffer-substring-no-properties beg end)))
@@ -193,6 +196,7 @@ Math nodes that appear after a parse error in the document are excluded."
     (nreverse result)))
 
 (defun typst-overlay--sort-math-nodes (nodes)
+  "Sort math NODES by buffer position."
   (sort nodes
         (lambda (a b)
           (< (typst-overlay-math-node-beg a)
@@ -204,6 +208,9 @@ Math nodes that appear after a parse error in the document are excluded."
   first-error)
 
 (defun typst-overlay--analyze-typst ()
+  "Analyze the current Typst buffer using tree-sitter.
+Return a `typst-overlay-analysis' with its code nodes, math nodes
+and the position of the first parse error, if any."
   (let* ((root (treesit-buffer-root-node))
          (error-captures (treesit-query-capture root '((ERROR) @error)))
          (first-error (and error-captures
@@ -347,12 +354,15 @@ The result is returned in document order."
     (nreverse result)))
 
 (defun typst-overlay--prelude-code-node-p (code-node)
+  "Return non-nil if CODE-NODE is a #let, #import or #include."
   (let ((text (string-trim-left (typst-overlay-code-node-text code-node))))
     (or (string-prefix-p "#let" text)
         (string-prefix-p "#import" text)
         (string-prefix-p "#include" text))))
 
 (defun typst-overlay--make-snapshot (analysis)
+  "Return a `typst-overlay-snapshot' built from ANALYSIS.
+Each math node becomes an element paired with its prelude code."
   (let* ((code-nodes (typst-overlay-analysis-code-nodes analysis))
          (math-nodes (typst-overlay-analysis-math-nodes analysis))
          elements)
@@ -380,6 +390,7 @@ The result is returned in document order."
   deleted)  ;; list of old typst-overlay-element
 
 (defun typst-overlay--same-element-position-p (old-element new-element)
+  "Return non-nil if OLD-ELEMENT and NEW-ELEMENT span the same region."
   (and (= (typst-overlay-element-beg old-element)
           (typst-overlay-element-beg new-element))
        (= (typst-overlay-element-end old-element)
@@ -413,12 +424,15 @@ The result is returned in document order."
     (puthash cache-key (cdr queue) old-queues)))
 
 (defun typst-overlay--make-added-entry (new-element)
+  "Return a diff entry marking NEW-ELEMENT as added."
   (make-typst-overlay-diff-entry
    :status 'added
    :old nil
    :new new-element))
 
 (defun typst-overlay--make-matched-entry (old-element new-element)
+  "Return a diff entry matching OLD-ELEMENT to NEW-ELEMENT.
+The status is `unchanged' if both span the same region, else `moved'."
   (let ((status (if (typst-overlay--same-element-position-p
                      old-element new-element)
                     'unchanged
@@ -493,11 +507,13 @@ The resulting diff contains:
   generation)  ;; latest generation applied
 
 (defun typst-overlay--make-registry ()
+  "Return an empty `typst-overlay-registry'."
   (make-typst-overlay-registry
    :records (make-hash-table :test #'equal)
    :generation 0))
 
 (defun typst-overlay--make-artifact-cache ()
+  "Return an empty artifact cache."
   (make-hash-table :test #'equal))
 
 (defun typst-overlay--load-artifact-cache ()
@@ -515,6 +531,7 @@ The resulting diff contains:
                    typst-overlay--artifact-cache))))))
 
 (defun typst-overlay--ensure-runtime ()
+  "Create the registry and artifact cache if they do not exist yet."
   (unless typst-overlay--registry
     (setq typst-overlay--registry
           (typst-overlay--make-registry)))
@@ -524,6 +541,7 @@ The resulting diff contains:
     (typst-overlay--load-artifact-cache)))
 
 (defun typst-overlay--occurrence-key (element)
+  "Return the registry key for ELEMENT, its (BEG . END) region."
   (cons (typst-overlay-element-beg element)
         (typst-overlay-element-end element)))
 
@@ -886,6 +904,7 @@ the result."
      "\n")))
 
 (defun typst-overlay--foreground-color ()
+  "Return the default face's foreground color, or black."
   (let ((fg (face-foreground 'default nil t)))
     (if (stringp fg) fg "#000000")))
 
@@ -1070,12 +1089,13 @@ Intended for use in `after-save-hook'."
     (setq typst-overlay--last-point curr-point)))
 
 (defun typst-overlay--enable ()
+  "Set up `typst-overlay-mode' in the current buffer."
   (unless (executable-find "typst")
     (user-error "Binary typst not found in PATH"))
   (setq-local typst-overlay--analyzer
-              (pcase major-mode
-                ('org-mode #'typst-overlay--analyze-org)
-                (_ #'typst-overlay--analyze-typst)))
+              (if (derived-mode-p 'org-mode)
+                  #'typst-overlay--analyze-org
+                #'typst-overlay--analyze-typst))
   (typst-overlay--ensure-runtime)
   (setq typst-overlay--last-point (point))
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
@@ -1084,6 +1104,7 @@ Intended for use in `after-save-hook'."
   (typst-overlay-refresh))
 
 (defun typst-overlay--disable ()
+  "Tear down `typst-overlay-mode' in the current buffer."
   (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
   (remove-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (remove-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
