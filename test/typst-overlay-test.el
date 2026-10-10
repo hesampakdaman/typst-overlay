@@ -18,6 +18,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'image)  ; before `create-image' is stubbed, so loading it later cannot undo that
 (require 'org)
 (require 'typst-overlay)
 
