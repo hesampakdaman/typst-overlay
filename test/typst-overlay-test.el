@@ -121,19 +121,28 @@ The case name is part of the compared value so failures show it."
 
 ;;; Requirements
 
-(defun typst-overlay-test--enable-error (has-typst has-grammar)
-  "Enable the mode with HAS-TYPST and HAS-GRAMMAR faked.
+(cl-defun typst-overlay-test--enable-error (has-typst has-grammar
+                                                     &optional (has-svg t))
+  "Enable the mode with HAS-TYPST, HAS-GRAMMAR and HAS-SVG faked.
 Return the `user-error' message and whether the mode stayed on."
   (with-temp-buffer
     (org-mode)
     (cl-letf (((symbol-function 'executable-find)
                (lambda (&rest _) (and has-typst "/usr/bin/typst")))
               ((symbol-function 'treesit-language-available-p)
-               (lambda (&rest _) has-grammar)))
+               (lambda (&rest _) has-grammar))
+              ((symbol-function 'image-type-available-p)
+               (lambda (&rest _) has-svg)))
       (list (condition-case err
                 (progn (typst-overlay-mode 1) nil)
               (user-error (cadr err)))
             typst-overlay-mode))))
+
+(ert-deftest typst-overlay-test-missing-svg-support ()
+  "Without SVG support in Emacs the mode refuses to turn on."
+  (pcase-let ((`(,message ,mode) (typst-overlay-test--enable-error t t nil)))
+    (should (string-match-p "SVG" message))
+    (should-not mode)))
 
 (ert-deftest typst-overlay-test-missing-typst ()
   "Without the typst binary the mode refuses to turn on."

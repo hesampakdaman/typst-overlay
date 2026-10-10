@@ -8,7 +8,7 @@ Render Typst math equations as inline overlays in Emacs. Equations are asynchron
 Equations that fail to compile are underlined (face =typst-overlay-error=); move point into one, or hover over it, to see the error.
 
 ** Requirements
-- Emacs 29.1 or later
+- Emacs 29.1 or later, built with SVG support (most builds are)
 - [[https://typst.app][typst]] compiler available on =PATH=
 - [[https://github.com/uben0/tree-sitter-typst][Tree-sitter grammar for Typst]], used to find equations in both modes. It is already installed if you use =typst-ts-mode=; otherwise run =M-x treesit-install-language-grammar=.
 
