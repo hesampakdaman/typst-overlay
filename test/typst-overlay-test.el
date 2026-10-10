@@ -110,6 +110,31 @@ The case name is part of the compared value so failures show it."
     ("after code" "#let v = 2\n#box[text]\n$u$" ("$u$"))
     ("before parse error" "Before $p$.\n#let broken = (\nAfter $q$." ("$p$"))
     ("nested math (#6)" "a $#table($x$)$ b" ("$#table($x$)$"))
+    ;; Broken equations are kept and the rest continues
+    ("broken equation among sections"
+     "= Intro\n\nFirst $a$ and $b^2$.\n\n= Methods\n\nBroken $frac(1, 2$ here.\n\nThen $c$.\n\n= Results\n\n$ sum_(i=1)^n i $\n"
+     ("$a$" "$b^2$" "$frac(1, 2$" "$c$" "$ sum_(i=1)^n i $"))
+    ("unclosed string in math"
+     "Good $a$.\n\nBroken $ \"oops $ here.\n\nAfter $b$ and $c$.\n"
+     ("$a$" "$ \"oops $" "$b$" "$c$"))
+    ("broken equation inside a content block"
+     "#block[\n  Inside $a$ and $frac(1, 2$.\n]\n\nOutside $b$.\n"
+     ("$a$" "$frac(1, 2$" "$b$"))
+    ("two broken equations"
+     "$a$ then $frac(1$ and $ \"x $ then $b$.\n"
+     ("$a$" "$frac(1$" "$ \"x $" "$b$"))
+    ("two broken equations under a heading"
+     "= A\n\nOne $frac(1, 2$.\n\nGood $a$.\n\nTwo $ \"oops $.\n\nGood $b$.\n"
+     ("$frac(1, 2$" "$a$" "$ \"oops $" "$b$"))
+    ("dollars in raw text are not blamed"
+     "= A\n\nRaw `$ \"x $` here.\n\nBroken $frac(1, 2$.\n\nAfter $b$.\n"
+     ("$frac(1, 2$" "$b$"))
+    ("code still recognised after a broken equation"
+     "Broken $frac(1, 2$.\n\n#let f = $a$\n\nAfter $b$.\n"
+     ("$frac(1, 2$" "$b$"))
+    ("dollars in a comment are not blamed"
+     "= A\n\n// see $ \"x $ here\n\nBroken $frac(1, 2$.\n\nAfter $b$.\n"
+     ("$frac(1, 2$" "$b$"))
     ;; Not detected
     ("bound in #let" "#let f = $a$" ())
     ("inside code expression" "#box[#let k = 1 and $z$]" ())

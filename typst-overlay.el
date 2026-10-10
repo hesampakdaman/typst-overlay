@@ -119,8 +119,8 @@ Should return a `typst-overlay-analysis' struct.")
      :text text
      :hash (md5 text))))
 
-(defun typst-overlay--collect-code-nodes ()
-  "Collect outermost code nodes in document order.
+(defun typst-overlay--collect-code-nodes (root)
+  "Collect outermost code nodes under ROOT in document order.
 
 We query all `code` nodes via tree-sitter, but this includes nested
 code blocks.  We only want top-level (outermost) ones, since nested
@@ -131,8 +131,7 @@ If we encounter another `code` node, this node is nested and skipped.
 
 Remaining nodes are converted to `typst-overlay-code-node's and
 returned in document order."
-  (let* ((root (treesit-buffer-root-node))
-         (query '((code) @code))
+  (let* ((query '((code) @code))
          (captures (treesit-query-capture root query))
          result)
     (dolist (cap captures)
@@ -228,23 +227,111 @@ Math nodes that appear after a parse error in the document are excluded."
   math-nodes
   first-error)
 
+(defun typst-overlay--first-error (root)
+  "Return the start of the first parse error under ROOT, or nil."
+  (let ((captures (treesit-query-capture root '((ERROR) @error))))
+    (and captures
+         (apply #'min (mapcar (lambda (cap) (treesit-node-start (cdr cap)))
+                              captures)))))
+
 (defun typst-overlay--analyze-typst ()
   "Analyze the current Typst buffer using tree-sitter.
 Return a `typst-overlay-analysis' with its code nodes, math nodes
-and the position of the first parse error, if any."
+and the position of the first parse error, if any.
+
+A syntax error in one equation usually makes tree-sitter give up on
+the rest of the document.  So when the buffer has errors, it is
+parsed again with its broken equations blanked out, see
+`typst-overlay--repair-parse'.  Those equations are still returned,
+so they are compiled and underlined with their error."
   (let* ((root (treesit-buffer-root-node))
-         (error-captures (treesit-query-capture root '((ERROR) @error)))
-         (first-error (and error-captures
-                           (apply #'min
-                                  (mapcar (lambda (cap)
-                                            (treesit-node-start (cdr cap)))
-                                          error-captures)))))
+         (repair (and (typst-overlay--first-error root)
+                      (typst-overlay--repair-parse)))
+         (root (if repair (car repair) root))
+         (first-error (typst-overlay--first-error root)))
     (make-typst-overlay-analysis
      :code-nodes (typst-overlay--sort-code-nodes
-                  (typst-overlay--collect-code-nodes))
+                  (typst-overlay--collect-code-nodes root))
      :math-nodes (typst-overlay--sort-math-nodes
-                  (typst-overlay--collect-math-nodes root first-error))
+                  (nconc (typst-overlay--collect-math-nodes root first-error)
+                         (mapcar (pcase-lambda (`(,beg . ,end))
+                                   (typst-overlay--span-math-node beg end))
+                                 (cdr repair))))
      :first-error first-error)))
+
+(defun typst-overlay--span-math-node (beg end)
+  "Return a math node for the text from BEG to END."
+  (let ((text (buffer-substring-no-properties beg end)))
+    (make-typst-overlay-math-node :beg beg :end end
+                                  :text text :text-hash (md5 text))))
+
+(defvar typst-overlay--repair-buffer nil
+  "Hidden buffer holding a copy of a Typst buffer being repaired.")
+
+(defun typst-overlay--repair-parse ()
+  "Parse a copy of the current buffer with broken equations blanked out.
+Return (ROOT . BROKEN): ROOT is the root node of the repaired copy,
+whose positions match the buffer, and BROKEN the (BEG . END) spans
+of the equations that were blanked out.
+
+Starting at the first parse error, the first unescaped $ that does
+not start clean math is paired with the next one, as in org buffers,
+and blanked out with spaces, keeping positions.  Dollar signs in
+comments, strings and raw text are skipped; the grammar still finds
+those inside parse errors.  This repeats until the copy parses, or
+no equation is to blame, such as for an error in code."
+  (let ((text (save-restriction
+                (widen)
+                (buffer-substring-no-properties (point-min) (point-max)))))
+    (unless (buffer-live-p typst-overlay--repair-buffer)
+      (setq typst-overlay--repair-buffer
+            (generate-new-buffer " *typst-overlay-repair*" t))
+      (with-current-buffer typst-overlay--repair-buffer
+        (buffer-disable-undo)
+        (treesit-parser-create 'typst)))
+    (with-current-buffer typst-overlay--repair-buffer
+      (erase-buffer)
+      (insert text)
+      (let (broken span)
+        (while (setq span (typst-overlay--blank-broken-math
+                           (typst-overlay--first-error
+                            (treesit-buffer-root-node 'typst))))
+          (push span broken))
+        (cons (treesit-buffer-root-node 'typst) (nreverse broken))))))
+
+(defconst typst-overlay--literal-node-types
+  '("comment" "string" "raw_span" "raw_blck")
+  "Typst node types whose dollar signs are not math.")
+
+(defun typst-overlay--literal-p (pos)
+  "Return non-nil if POS is in a comment, string or raw text."
+  (let ((node (treesit-node-at pos 'typst)))
+    (while (and node (not (member (treesit-node-type node)
+                                  typst-overlay--literal-node-types)))
+      (setq node (treesit-node-parent node)))
+    node))
+
+(defun typst-overlay--blank-broken-math (error)
+  "Blank out the first broken equation from the parse ERROR, a position.
+Return its (BEG . END) span, or nil if ERROR is nil or no broken
+equation follows it."
+  (when error
+    (save-excursion
+      (goto-char error)
+      (catch 'found
+        (while (search-forward "$" nil t)
+          (let* ((beg (1- (point)))
+                 (limit (typst-overlay--org-paragraph-end))
+                 (end (and (not (typst-overlay--escaped-p beg))
+                           (not (typst-overlay--literal-p beg))
+                           (not (typst-overlay--org-math-end beg limit))
+                           (typst-overlay--org-find-closing limit))))
+            (if (not end)
+                (goto-char (1+ beg))
+              (let ((original (buffer-substring beg end)))
+                (delete-region beg end)
+                (insert (replace-regexp-in-string "[^\n]" " " original))
+                (throw 'found (cons beg end))))))))))
 
 (defconst typst-overlay--org-code-types
   '(src-block example-block export-block fixed-width comment comment-block
