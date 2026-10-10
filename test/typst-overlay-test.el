@@ -610,6 +610,36 @@ counts of every compile started, in order."
     ;; Only the second enable's compiles placed overlays, once each.
     (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 3))))
 
+;;; Image size
+
+(defconst typst-overlay-test--image-size-cases
+  '(("real typst header, default scale"
+     "<svg viewBox=\"0 0 13.2893 11.2268\" width=\"13.2893pt\" height=\"11.2268pt\" xmlns=\"http://www.w3.org/2000/svg\"><g/></svg>"
+     1.3 (:height (1.3268 . em)))
+    ("one em at scale 1"
+     "<svg width=\"30pt\" height=\"11pt\"><g/></svg>" 1.0 (:height (1.0 . em)))
+    ("height on an inner element is ignored"
+     "<svg width=\"30pt\"><rect height=\"22pt\"/></svg>" 1.3 (:scale 1.3))
+    ("height without units falls back"
+     "<svg width=\"30\" height=\"11\"><g/></svg>" 1.3 (:scale 1.3)))
+  "Image size cases: (NAME SVG SCALE EXPECTED).
+EXPECTED is the size property the image is created with.")
+
+(ert-deftest typst-overlay-test-image-size ()
+  "Images are sized in ems from the SVG height, or fall back to a scale."
+  (dolist (case typst-overlay-test--image-size-cases)
+    (pcase-let ((`(,name ,svg ,scale ,expected) case))
+      (cl-letf (((symbol-function 'create-image)
+                 (lambda (_data _type _data-p &rest props) props)))
+        (let* ((typst-overlay-scale scale)
+               (props (typst-overlay--create-image svg))
+               (actual (if (plist-member props :height)
+                           (let ((height (plist-get props :height)))
+                             (list :height (cons (/ (round (* 10000 (car height))) 10000.0)
+                                                 (cdr height))))
+                         (list :scale (plist-get props :scale)))))
+          (should (equal (list name expected) (list name actual))))))))
+
 (provide 'typst-overlay-test)
 
 ;;; typst-overlay-test.el ends here

@@ -51,7 +51,11 @@
   :prefix "typst-overlay-")
 
 (defcustom typst-overlay-scale 1.3
-  "Scale factor for rendered equations."
+  "Size of rendered equations relative to the surrounding text.
+At 1.0 the math is drawn at the same size as the text around it.
+Equations follow that text's size, so they grow and shrink with
+`text-scale-adjust' and are larger in larger faces, such as org
+headings."
   :type 'number
   :group 'typst-overlay)
 
@@ -885,10 +889,26 @@ The message is shown once per entry, not after every command."
     (replace-regexp-in-string
      (regexp-quote "#000000") fg contents t t)))
 
+(defconst typst-overlay--typst-font-size 11.0
+  "Typst's default text size in points, which equations are compiled at.")
+
+(defun typst-overlay--create-image (svg-data)
+  "Return an image of SVG-DATA sized relative to the surrounding text.
+Its height is given in ems, so it follows the font where it is shown,
+including `text-scale-adjust'.  SVG-DATA without a height in points
+falls back to a fixed `typst-overlay-scale'."
+  (if (string-match "<svg[^>]* height=\"\\([0-9.]+\\)pt\"" svg-data)
+      (create-image svg-data 'svg t :ascent 'center
+                    :height (cons (* typst-overlay-scale
+                                     (/ (string-to-number (match-string 1 svg-data))
+                                        typst-overlay--typst-font-size))
+                                  'em))
+    (create-image svg-data 'svg t :ascent 'center :scale typst-overlay-scale)))
+
 (defun typst-overlay--place-overlay-from-svg (beg end svg-path)
   "Create and return an overlay from BEG to END displaying SVG-PATH."
   (let* ((svg-data (typst-overlay--recolor-svg svg-path))
-         (image (create-image svg-data 'svg t :ascent 'center :scale typst-overlay-scale))
+         (image (typst-overlay--create-image svg-data))
          (overlay (make-overlay beg end nil t nil)))
     (overlay-put overlay 'display image)
     (overlay-put overlay 'typst-overlay t)
@@ -911,7 +931,7 @@ The message is shown once per entry, not after every command."
            (when (and artifact (overlayp overlay))
              (let* ((svg-data (typst-overlay--recolor-svg
                                (typst-overlay-artifact-svg-path artifact)))
-                    (image (create-image svg-data 'svg t :ascent 'center :scale typst-overlay-scale)))
+                    (image (typst-overlay--create-image svg-data)))
                (overlay-put overlay 'typst-overlay-image image)
                (unless (eq overlay typst-overlay--active-overlay)
                  (overlay-put overlay 'display image)))))))
