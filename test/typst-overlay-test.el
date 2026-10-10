@@ -496,6 +496,8 @@ counts of every compile started, in order."
          (cl-letf (((symbol-function 'executable-find)
                     (lambda (&rest _) "/usr/bin/typst"))
                    ;; CI's Emacs may lack SVG support; no real image is needed.
+                   ((symbol-function 'image-type-available-p)
+                    (lambda (&rest _) t))
                    ((symbol-function 'create-image)
                     (lambda (&rest _) '(image :type svg)))
                    ((symbol-function 'typst-overlay--compile-async)
