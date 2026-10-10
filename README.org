@@ -40,6 +40,12 @@ All options are available via =M-x customize-group RET typst-overlay=.
 | =typst-overlay-extra-prelude=       | =""=                   | Extra typst prelude code             |
 |-------------------------------------+------------------------+--------------------------------------|
 
+** Running tests
+#+begin_src sh
+  emacs --batch -Q -L . -l test/typst-overlay-test.el -f ert-run-tests-batch-and-exit
+#+end_src
+The Typst tests are skipped if the Typst tree-sitter grammar is not installed.
+
 ** Contributing
 Bug reports and patches are welcome.
 
