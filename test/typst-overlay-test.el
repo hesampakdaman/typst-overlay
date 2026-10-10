@@ -4,9 +4,11 @@
 
 ;;; Commentary:
 
-;; Table-driven tests for equation detection.  Each case is
-;; (NAME INPUT EXPECTED), where EXPECTED is the list of equation
-;; texts, in buffer order, that should be detected in INPUT.
+;; Table-driven tests.  Detection cases are (NAME INPUT EXPECTED),
+;; where EXPECTED is the list of equation texts, in buffer order, that
+;; should be detected in INPUT.  Pipeline cases cover how old and new
+;; equations are matched (the diff) and whether each one is placed,
+;; compiled or left alone (the plan).
 ;;
 ;; Run with:
 ;;
@@ -106,6 +108,175 @@ The case name is part of the compared value so failures show it."
   (skip-unless (treesit-language-available-p 'typst))
   (typst-overlay-test--run-cases #'typst-overlay-test--setup-typst
                                  typst-overlay-test--typst-cases))
+
+;;; Pipeline
+
+;; Elements are written as (BEG TEXT); old elements in plan cases as
+;; (BEG TEXT STATE), where STATE is the record state before refresh.
+;; Results are summarized by element start positions.
+
+(defun typst-overlay-test--element (beg text)
+  "Return an element for TEXT starting at BEG, with no prelude."
+  (typst-overlay--make-element
+   (make-typst-overlay-math-node :beg beg
+                                 :end (+ beg (length text))
+                                 :text text
+                                 :text-hash (md5 text))
+   nil))
+
+(defun typst-overlay-test--snapshot (specs)
+  "Return a snapshot of elements built from SPECS, a list of (BEG TEXT)."
+  (make-typst-overlay-snapshot
+   :version 0
+   :elements (mapcar (lambda (spec)
+                       (typst-overlay-test--element (nth 0 spec) (nth 1 spec)))
+                     specs)))
+
+(defun typst-overlay-test--beg (element)
+  "Return the start of ELEMENT, or nil if ELEMENT is nil."
+  (and element (typst-overlay-element-beg element)))
+
+(defun typst-overlay-test--summarize-diff (diff)
+  "Summarize DIFF as (:entries ((STATUS OLD-BEG NEW-BEG) ...) :deleted BEGS)."
+  (list :entries (mapcar (lambda (entry)
+                           (list (typst-overlay-diff-entry-status entry)
+                                 (typst-overlay-test--beg
+                                  (typst-overlay-diff-entry-old entry))
+                                 (typst-overlay-test--beg
+                                  (typst-overlay-diff-entry-new entry))))
+                         (typst-overlay-diff-entries diff))
+        :deleted (mapcar #'typst-overlay-test--beg
+                         (typst-overlay-diff-deleted diff))))
+
+(defconst typst-overlay-test--diff-cases
+  '(("nothing changed"
+     ((1 "$a$") (10 "$b$")) ((1 "$a$") (10 "$b$"))
+     (:entries ((unchanged 1 1) (unchanged 10 10)) :deleted ()))
+    ("first equation"
+     () ((1 "$a$"))
+     (:entries ((added nil 1)) :deleted ()))
+    ("one edited"
+     ((1 "$a$") (10 "$b$")) ((1 "$a$") (10 "$c$"))
+     (:entries ((unchanged 1 1) (added nil 10)) :deleted (10)))
+    ("shifted by text above"
+     ((1 "$a$") (10 "$b$")) ((1 "$a$") (15 "$b$"))
+     (:entries ((unchanged 1 1) (moved 10 15)) :deleted ()))
+    ("one deleted"
+     ((1 "$a$") (10 "$b$")) ((1 "$a$"))
+     (:entries ((unchanged 1 1)) :deleted (10)))
+    ("swapped"
+     ((1 "$a$") (10 "$b$")) ((1 "$b$") (10 "$a$"))
+     (:entries ((moved 10 1) (moved 1 10)) :deleted ()))
+    ("duplicate, second removed"
+     ((1 "$x$") (10 "$x$")) ((1 "$x$"))
+     (:entries ((unchanged 1 1)) :deleted (10)))
+    ("duplicate, matched in order"
+     ((1 "$x$") (10 "$x$")) ((5 "$x$"))
+     (:entries ((moved 1 5)) :deleted (10))))
+  "Diff cases: (NAME OLD NEW EXPECTED).")
+
+(ert-deftest typst-overlay-test-diff ()
+  "Old and new elements are matched as expected."
+  (dolist (case typst-overlay-test--diff-cases)
+    (pcase-let ((`(,name ,old ,new ,expected) case))
+      (should (equal (list name expected)
+                     (list name
+                           (typst-overlay-test--summarize-diff
+                            (typst-overlay--diff-snapshots
+                             (typst-overlay-test--snapshot old)
+                             (typst-overlay-test--snapshot new)))))))))
+
+(defun typst-overlay-test--artifact (element)
+  "Return a fake artifact for ELEMENT."
+  (make-typst-overlay-artifact
+   :cache-key (typst-overlay-element-cache-key element)
+   :svg-path "unused.svg"))
+
+(defun typst-overlay-test--registry (old)
+  "Return a registry with a record for each (BEG TEXT STATE) in OLD.
+Records that are `visible' or `stale' have an artifact; only
+`visible' ones have an overlay, represented by a placeholder."
+  (let ((registry (typst-overlay--make-registry)))
+    (dolist (spec old)
+      (pcase-let* ((`(,beg ,text ,state) spec)
+                   (element (typst-overlay-test--element beg text)))
+        (typst-overlay--put-record
+         registry element
+         (make-typst-overlay-record
+          :element element
+          :state state
+          :overlay (and (eq state 'visible) 'overlay)
+          :artifact (and (memq state '(visible stale))
+                         (typst-overlay-test--artifact element))
+          :generation 1))))
+    registry))
+
+(defun typst-overlay-test--artifact-cache (texts)
+  "Return an artifact cache holding an artifact for each of TEXTS."
+  (let ((cache (typst-overlay--make-artifact-cache)))
+    (dolist (text texts)
+      (let ((artifact (typst-overlay-test--artifact
+                       (typst-overlay-test--element 1 text))))
+        (puthash (typst-overlay-artifact-cache-key artifact) artifact cache)))
+    cache))
+
+(defun typst-overlay-test--summarize-plan (plan)
+  "Summarize PLAN as (:delete OLD-BEGS :place NEW-BEGS :render NEW-BEGS)."
+  (list :delete (mapcar (lambda (op)
+                          (typst-overlay-test--beg (typst-overlay-delete-op-old op)))
+                        (typst-overlay-render-plan-delete plan))
+        :place (mapcar (lambda (op)
+                         (typst-overlay-test--beg (typst-overlay-place-op-new op)))
+                       (typst-overlay-render-plan-place plan))
+        :render (mapcar (lambda (op)
+                          (typst-overlay-test--beg (typst-overlay-render-op-new op)))
+                        (typst-overlay-render-plan-render plan))))
+
+(defconst typst-overlay-test--plan-cases
+  '(("visible and unchanged: nothing to do"
+     ((1 "$a$" visible)) () ((1 "$a$"))
+     (:delete () :place () :render ()))
+    ("new, in cache: placed without compiling"
+     () ("$a$") ((1 "$a$"))
+     (:delete () :place (1) :render ()))
+    ("new, not in cache: compiled"
+     () () ((1 "$a$"))
+     (:delete () :place () :render (1)))
+    ("moved: image reused"
+     ((1 "$a$" visible)) () ((5 "$a$"))
+     (:delete () :place (5) :render ()))
+    ("moved while compiling: compiled again"
+     ((1 "$a$" rendering)) () ((5 "$a$"))
+     (:delete () :place () :render (5)))
+    ("edited: old removed, new compiled"
+     ((1 "$a$" visible)) () ((1 "$b$"))
+     (:delete (1) :place () :render (1)))
+    ("stale: compiled again"
+     ((1 "$a$" stale)) () ((1 "$a$"))
+     (:delete () :place () :render (1)))
+    ("failed and unchanged: not retried"
+     ((1 "$a$" failed)) () ((1 "$a$"))
+     (:delete () :place () :render ())))
+  "Plan cases: (NAME OLD CACHED NEW EXPECTED).
+OLD is the previous elements with their record states, CACHED the
+texts with an artifact in the cache, and NEW the current elements.")
+
+(ert-deftest typst-overlay-test-plan ()
+  "Each element is placed, compiled or left alone as expected."
+  (dolist (case typst-overlay-test--plan-cases)
+    (pcase-let ((`(,name ,old ,cached ,new ,expected) case))
+      (let ((diff (typst-overlay--diff-snapshots
+                   (typst-overlay-test--snapshot
+                    (mapcar (lambda (spec) (list (nth 0 spec) (nth 1 spec))) old))
+                   (typst-overlay-test--snapshot new))))
+        (should (equal (list name expected)
+                       (list name
+                             (typst-overlay-test--summarize-plan
+                              (typst-overlay--plan-render
+                               diff
+                               (typst-overlay-test--registry old)
+                               (typst-overlay-test--artifact-cache cached)
+                               2)))))))))
 
 (provide 'typst-overlay-test)
 
