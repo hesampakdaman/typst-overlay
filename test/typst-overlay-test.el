@@ -70,6 +70,13 @@ The case name is part of the compared value so failures show it."
     ("escaped backslash before $" "a \\\\$x$ b" ("$x$"))
     ("after stray $ and blank line" "a $ b\n\nlater $z$" ("$z$"))
     ("after heading" "a $ b\n* Heading\nthen $y$" ("$y$"))
+    ("nested math (#6)" "a $#table($x$)$ b" ("$#table($x$)$"))
+    ("nested two levels" "$#table($#box[$y$]$)$ b" ("$#table($#box[$y$]$)$"))
+    ("dollar in a string in code" "$#table(\"a $ b\")$ c" ("$#table(\"a $ b\")$"))
+    ("escaped dollar inside math" "$a \\$ b$ c" ("$a \\$ b$"))
+    ("half-open interval" "an $[0, 1)$ interval" ("$[0, 1)$"))
+    ("variable in math" "$#x$ var" ("$#x$"))
+    ("unclosed outer, inner math only" "$#table($x$ unclosed" ("$x$"))
     ;; Not detected
     ("escaped dollars" "costs \\$5 and \\$6" ())
     ("escaped dollars before words" "use \\$a or \\$b" ())
@@ -86,6 +93,7 @@ The case name is part of the compared value so failures show it."
 
 (ert-deftest typst-overlay-test-org-detection ()
   "The org analyzer detects exactly the expected equations."
+  (skip-unless (treesit-language-available-p 'typst))
   (typst-overlay-test--run-cases #'typst-overlay-test--setup-org
                                  typst-overlay-test--org-cases))
 
@@ -97,6 +105,7 @@ The case name is part of the compared value so failures show it."
     ("inside content block" "#box[inside $c$]\nend $d$" ("$c$" "$d$"))
     ("after code" "#let v = 2\n#box[text]\n$u$" ("$u$"))
     ("before parse error" "Before $p$.\n#let broken = (\nAfter $q$." ("$p$"))
+    ("nested math (#6)" "a $#table($x$)$ b" ("$#table($x$)$"))
     ;; Not detected
     ("bound in #let" "#let f = $a$" ())
     ("inside code expression" "#box[#let k = 1 and $z$]" ())
@@ -108,6 +117,35 @@ The case name is part of the compared value so failures show it."
   (skip-unless (treesit-language-available-p 'typst))
   (typst-overlay-test--run-cases #'typst-overlay-test--setup-typst
                                  typst-overlay-test--typst-cases))
+
+;;; Requirements
+
+(defun typst-overlay-test--enable-error (has-typst has-grammar)
+  "Enable the mode with HAS-TYPST and HAS-GRAMMAR faked.
+Return the `user-error' message and whether the mode stayed on."
+  (with-temp-buffer
+    (org-mode)
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (&rest _) (and has-typst "/usr/bin/typst")))
+              ((symbol-function 'treesit-language-available-p)
+               (lambda (&rest _) has-grammar)))
+      (list (condition-case err
+                (progn (typst-overlay-mode 1) nil)
+              (user-error (cadr err)))
+            typst-overlay-mode))))
+
+(ert-deftest typst-overlay-test-missing-typst ()
+  "Without the typst binary the mode refuses to turn on."
+  (pcase-let ((`(,message ,mode) (typst-overlay-test--enable-error nil t)))
+    (should (string-match-p "typst not found" message))
+    (should-not mode)))
+
+(ert-deftest typst-overlay-test-missing-grammar ()
+  "Without the Typst grammar the mode refuses to turn on."
+  (pcase-let ((`(,message ,mode) (typst-overlay-test--enable-error t nil)))
+    (should (string-match-p "grammar not found" message))
+    (should (string-match-p (regexp-quote typst-overlay--grammar-url) message))
+    (should-not mode)))
 
 ;;; Pipeline
 
