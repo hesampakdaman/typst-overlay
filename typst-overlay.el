@@ -1205,6 +1205,8 @@ Intended for use in `after-save-hook'."
 (defun typst-overlay--missing-requirement ()
   "Return a message describing a missing requirement, or nil."
   (cond
+   ((not (image-type-available-p 'svg))
+    "This Emacs cannot display SVG images; it must be built with SVG support (librsvg)")
    ((not (executable-find "typst"))
     "Binary typst not found in PATH")
    ((not (treesit-language-available-p 'typst))
