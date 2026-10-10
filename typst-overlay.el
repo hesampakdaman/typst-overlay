@@ -321,11 +321,11 @@ equation follows it."
       (catch 'found
         (while (search-forward "$" nil t)
           (let* ((beg (1- (point)))
-                 (limit (typst-overlay--org-paragraph-end))
+                 (limit (typst-overlay--paragraph-end))
                  (end (and (not (typst-overlay--escaped-p beg))
                            (not (typst-overlay--literal-p beg))
-                           (not (typst-overlay--org-math-end beg limit))
-                           (typst-overlay--org-find-closing limit))))
+                           (not (typst-overlay--math-end beg limit))
+                           (typst-overlay--find-closing limit))))
             (if (not end)
                 (goto-char (1+ beg))
               (let ((original (buffer-substring beg end)))
@@ -345,36 +345,36 @@ A character is escaped when preceded by an odd number of backslashes."
     (goto-char pos)
     (cl-oddp (- pos (progn (skip-chars-backward "\\\\") (point))))))
 
-(defun typst-overlay--org-paragraph-end ()
+(defun typst-overlay--paragraph-end ()
   "Return the end of the paragraph at point.
-The paragraph ends at the next blank line or heading."
+The paragraph ends at the next blank line or org heading."
   (save-excursion
     (if (re-search-forward "\n[ \t]*\n\\|\n\\*+ " nil t)
         (match-beginning 0)
       (point-max))))
 
-(defvar typst-overlay--org-parse-buffer nil
-  "Hidden buffer reused to parse candidate equations in org buffers.
+(defvar typst-overlay--math-parse-buffer nil
+  "Hidden buffer reused to parse candidate equations on their own.
 Reusing one buffer and parser is several times faster than
 `treesit-parse-string', which creates both on every call.")
 
-(defun typst-overlay--org-parse-buffer ()
+(defun typst-overlay--math-parse-buffer ()
   "Return the hidden Typst parse buffer, creating it if needed."
-  (unless (buffer-live-p typst-overlay--org-parse-buffer)
-    (setq typst-overlay--org-parse-buffer
+  (unless (buffer-live-p typst-overlay--math-parse-buffer)
+    (setq typst-overlay--math-parse-buffer
           (generate-new-buffer " *typst-overlay-parse*" t))
-    (with-current-buffer typst-overlay--org-parse-buffer
+    (with-current-buffer typst-overlay--math-parse-buffer
       (buffer-disable-undo)
       (treesit-parser-create 'typst)))
-  typst-overlay--org-parse-buffer)
+  typst-overlay--math-parse-buffer)
 
-(defun typst-overlay--org-math-end (beg limit)
+(defun typst-overlay--math-end (beg limit)
   "Return the end of the Typst math starting at BEG, or nil.
 The text from BEG to LIMIT is parsed with the Typst tree-sitter
 grammar, so nested math such as $#table($x$)$ is handled.  Return
 nil if no math starts at BEG or it does not parse cleanly."
   (let ((text (buffer-substring-no-properties beg limit)))
-    (with-current-buffer (typst-overlay--org-parse-buffer)
+    (with-current-buffer (typst-overlay--math-parse-buffer)
       (erase-buffer)
       (insert text)
       (let ((node (treesit-node-descendant-for-range
@@ -393,7 +393,7 @@ nil if no math starts at BEG or it does not parse cleanly."
     (memq (org-element-type (org-element-context))
           typst-overlay--org-code-types)))
 
-(defun typst-overlay--org-find-closing (limit)
+(defun typst-overlay--find-closing (limit)
   "Return the position after the next unescaped $ before LIMIT, or nil.
 Search from point."
   (catch 'found
@@ -426,11 +426,11 @@ that prose like \"$5 and $10\" is left alone."
       (goto-char (point-min))
       (while (search-forward "$" nil t)
         (let* ((beg (1- (point)))
-               (limit (typst-overlay--org-paragraph-end))
+               (limit (typst-overlay--paragraph-end))
                (end (and (not (typst-overlay--escaped-p beg))
-                         (or (typst-overlay--org-math-end beg limit)
+                         (or (typst-overlay--math-end beg limit)
                              (save-excursion
-                               (typst-overlay--org-find-closing limit))))))
+                               (typst-overlay--find-closing limit))))))
           (if (and end
                    (> (- end beg) 2)
                    (not (memq (char-after end)
