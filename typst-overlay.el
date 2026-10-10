@@ -2,7 +2,7 @@
 
 ;; Author: Hesam Pakdaman <https://github.com/hesampakdaman>
 ;; Maintainer: Hesam Pakdaman <https://github.com/hesampakdaman>
-;; Version: 0.1.0
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: tools
 ;; URL: https://github.com/hesampakdaman/typst-overlay
