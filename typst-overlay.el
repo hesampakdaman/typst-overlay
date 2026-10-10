@@ -50,7 +50,7 @@
   :group 'tools
   :prefix "typst-overlay-")
 
-(defcustom typst-overlay-scale 1.3
+(defcustom typst-overlay-scale 1.0
   "Size of rendered equations relative to the surrounding text.
 At 1.0 the math is drawn at the same size as the text around it.
 Equations follow that text's size, so they grow and shrink with
