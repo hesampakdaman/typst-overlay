@@ -14,7 +14,7 @@
 
 ;; typst-overlay renders Typst math equations as inline overlays.
 ;; Equations are compiled asynchronously to SVG with the `typst'
-;; compiler and displayed over the source text.  The overlay is hidden
+;; compiler, many per process, and displayed over the source text.  The overlay is hidden
 ;; while point is inside an equation, so you can edit the raw source,
 ;; and restored when point leaves.
 ;;
@@ -61,7 +61,9 @@
   :group 'typst-overlay)
 
 (defcustom typst-overlay-max-active-compiles 8
-  "Maximum number of concurrent Typst compilation processes."
+  "Maximum number of concurrent Typst compilation processes.
+Equations to render are spread evenly over this many processes, each
+compiling its share in one batch."
   :type 'natnum
   :group 'typst-overlay)
 
@@ -735,8 +737,10 @@ ARTIFACT-CACHE is passed on when starting renders."
       (typst-overlay--apply-delete-op op registry))
     (dolist (op (typst-overlay-render-plan-place plan))
       (typst-overlay--apply-place-op op registry generation))
-    (dolist (op (typst-overlay-render-plan-render plan))
-      (typst-overlay--apply-render-op op registry generation artifact-cache))
+    (typst-overlay--start-renders
+     (mapcar (lambda (op) (typst-overlay--apply-render-op op registry generation))
+             (typst-overlay-render-plan-render plan))
+     generation artifact-cache)
     (setf (typst-overlay-registry-generation registry) generation)))
 
 (defun typst-overlay--apply-delete-op (op registry)
@@ -769,10 +773,10 @@ GENERATION stamps the record so stale async results can be ignored."
           (typst-overlay--place-artifact-overlay new-element artifact))
     (typst-overlay--put-record registry new-element record)))
 
-(defun typst-overlay--apply-render-op (op registry generation artifact-cache)
+(defun typst-overlay--apply-render-op (op registry generation)
   "Apply render OP by registering its new element in REGISTRY.
-Start an async render stamped with GENERATION.  ARTIFACT-CACHE receives
-the result."
+The record is stamped with GENERATION.  Return the new element, to be
+rendered by `typst-overlay--start-renders'."
   (let* ((old-element (typst-overlay-render-op-old op))
          (new-element (typst-overlay-render-op-new op))
          (record (and old-element
@@ -789,7 +793,7 @@ the result."
           (typst-overlay-record-artifact record) nil
           (typst-overlay-record-generation record) generation)
     (typst-overlay--put-record registry new-element record)
-    (typst-overlay--start-render-for-element new-element generation artifact-cache)))
+    new-element))
 
 (defun typst-overlay--put-record (registry element record)
   "Store RECORD for ELEMENT occurrence key in REGISTRY."
@@ -939,21 +943,112 @@ The message is shown once per entry, not after every command."
         typst-overlay--registry nil
         typst-overlay--artifact-cache nil))
 
-(defun typst-overlay--build-element-source (element)
-  "Build a complete Typst source string for ELEMENT."
-  (let ((prelude (typst-overlay-element-prelude-text element))
-        (math (typst-overlay-element-text element)))
-    (concat
-     "#set page(width: auto, height: auto, margin: 1pt, fill: none)\n"
-     "#set text(top-edge: \"bounds\", bottom-edge: \"bounds\")\n"
-     "#set text(fill: rgb(\"#000000\"))\n"
-     (if (string-empty-p typst-overlay-extra-prelude)
-         ""
-       (concat typst-overlay-extra-prelude "\n"))
-     prelude
-     (unless (string-empty-p prelude) "\n\n")
-     math
-     "\n")))
+;; batch compile
+;;
+;; Starting `typst' takes about a second, while compiling an equation
+;; takes a few milliseconds.  So the equations to render are compiled
+;; in batches: one Typst document per batch, one page per equation,
+;; written to one SVG per page.  Each equation sits in its own #[...]
+;; block, so its prelude does not leak into the others.
+;;
+;; When a batch fails, `typst' reports only its first error and
+;; writes no pages.  The error's line tells which equation failed, or
+;; which prelude, shared by every equation that uses it.  Those are
+;; marked failed and the rest is compiled again.  An error that cannot
+;; be traced falls back to compiling each equation on its own.
+
+(defconst typst-overlay--source-header
+  (concat "#set page(width: auto, height: auto, margin: 1pt, fill: none)\n"
+          "#set text(top-edge: \"bounds\", bottom-edge: \"bounds\")\n"
+          "#set text(fill: rgb(\"#000000\"))\n")
+  "Typst source that starts every batch.")
+
+(cl-defstruct typst-overlay-job
+  element      ;; typst-overlay-element to render
+  generation   ;; generation of the refresh that started it
+  svg-path     ;; where its SVG goes in the cache
+  markers)     ;; (BEG . END) markers following the equation
+
+(cl-defstruct typst-overlay-job-lines
+  beg          ;; first line of the job's block
+  prelude-end  ;; last line of its prelude, or BEG if it has none
+  end)         ;; last line of its block
+
+(defun typst-overlay--job-block (element)
+  "Return (BLOCK . PRELUDE-LINES) for ELEMENT.
+BLOCK is a Typst block rendering ELEMENT with its prelude, ending in
+a newline.  PRELUDE-LINES is how many lines its prelude takes."
+  (let* ((prelude (concat
+                   (unless (string-empty-p typst-overlay-extra-prelude)
+                     (concat typst-overlay-extra-prelude "\n"))
+                   (let ((text (typst-overlay-element-prelude-text element)))
+                     (unless (string-empty-p text)
+                       (concat text "\n"))))))
+    (cons (concat "#[\n"
+                  prelude
+                  ;; Number each equation as if compiled on its own.
+                  "#counter(math.equation).update(0)\n"
+                  (typst-overlay-element-text element)
+                  "\n]\n")
+          (cl-count ?\n prelude))))
+
+(defun typst-overlay--batch-source (jobs)
+  "Return (SOURCE . LINES) for compiling JOBS as one document.
+LINES has a `typst-overlay-job-lines' per job, in order, telling
+which lines of SOURCE belong to it."
+  (let ((parts (list typst-overlay--source-header))
+        (line (1+ (cl-count ?\n typst-overlay--source-header)))
+        lines)
+    (dolist (job jobs)
+      (unless (eq job (car jobs))
+        (push "#pagebreak()\n" parts)
+        (cl-incf line))
+      (pcase-let ((`(,block . ,prelude-lines)
+                   (typst-overlay--job-block (typst-overlay-job-element job))))
+        (push block parts)
+        (push (make-typst-overlay-job-lines
+               :beg line
+               :prelude-end (+ line prelude-lines)
+               :end (+ line (cl-count ?\n block) -1))
+              lines)
+        (cl-incf line (cl-count ?\n block))))
+    (cons (apply #'concat (nreverse parts)) (nreverse lines))))
+
+(defun typst-overlay--compile-error-location (output)
+  "Return (LINE . MESSAGE) for the first error in typst OUTPUT, or nil.
+OUTPUT is in typst's short diagnostic format.  Only errors in the
+compiled source itself, not in imported files, have a location."
+  (when (string-match "^<stdin>:\\([0-9]+\\):[0-9]+: error: \\(.*\\)$" output)
+    (cons (string-to-number (match-string 1 output))
+          (match-string 2 output))))
+
+(defun typst-overlay--failed-jobs (jobs lines line)
+  "Return the JOBS that fail because of an error at LINE, or nil.
+LINES are the jobs' `typst-overlay-job-lines'.  An error in a job's
+prelude fails every job with the same prelude."
+  (let ((index (cl-position-if
+                (lambda (job-lines)
+                  (<= (typst-overlay-job-lines-beg job-lines)
+                      line
+                      (typst-overlay-job-lines-end job-lines)))
+                lines)))
+    (when index
+      (let* ((job (nth index jobs))
+             (prelude-hash (typst-overlay-element-prelude-hash
+                            (typst-overlay-job-element job))))
+        (if (<= line (typst-overlay-job-lines-prelude-end (nth index lines)))
+            (seq-filter (lambda (other)
+                          (equal (typst-overlay-element-prelude-hash
+                                  (typst-overlay-job-element other))
+                                 prelude-hash))
+                        jobs)
+          (list job))))))
+
+(defun typst-overlay--batch-pages (dir)
+  "Return an alist of page number to SVG file in DIR."
+  (mapcar (lambda (file)
+            (cons (string-to-number (file-name-base file)) file))
+          (directory-files dir t "\\`[0-9]+\\.svg\\'")))
 
 (defun typst-overlay--foreground-color ()
   "Return the default face's foreground color, or black."
@@ -961,83 +1056,152 @@ The message is shown once per entry, not after every command."
     (if (stringp fg) fg "#000000")))
 
 (defun typst-overlay--drain-compile-queue ()
-  "Start queued compiles until the concurrency limit is reached."
+  "Start queued batches until the concurrency limit is reached."
   (while (and typst-overlay--compile-queue
               (< typst-overlay--active-compiles typst-overlay-max-active-compiles))
     (let ((thunk (pop typst-overlay--compile-queue)))
       (funcall thunk))))
 
-(defun typst-overlay--start-render-for-element (element generation artifact-cache)
-  "Start async render for ELEMENT at GENERATION.
-ARTIFACT-CACHE receives the result.  Respects the concurrency limit."
-  (let* ((buffer (current-buffer))
-         (file (buffer-file-name buffer))
-         (default-directory (if file
-                                (file-name-directory file)
-                              default-directory))
-         (cache-key (typst-overlay-element-cache-key element))
-         (svg-path (typst-overlay--artifact-svg-path cache-key))
-         (source (typst-overlay--build-element-source element))
-         ;; Markers follow edits made while the compile runs, so the
-         ;; result can be placed where the equation is by then.
-         (markers (typst-overlay--element-markers element))
-         (session typst-overlay--session)
-         (callback (lambda (status output)
-                     (when (buffer-live-p buffer)
-                       (with-current-buffer buffer
-                         (let ((current (typst-overlay--relocate-element
-                                         element markers)))
-                           (set-marker (car markers) nil)
-                           (set-marker (cdr markers) nil)
-                           ;; Ignore compiles from before a teardown: their
-                           ;; count and state were already reset.
-                           (when (= session typst-overlay--session)
-                             (cl-decf typst-overlay--active-compiles)
-                             (typst-overlay--drain-compile-queue)
-                             (if (eq status 'success)
-                                 (typst-overlay--handle-render-success
-                                  element current generation
-                                  cache-key svg-path artifact-cache)
-                               (typst-overlay--handle-render-failure
-                                element current generation output)))))))))
-    (if (< typst-overlay--active-compiles typst-overlay-max-active-compiles)
-        (progn
-          (cl-incf typst-overlay--active-compiles)
-          (typst-overlay--start-async-compile source svg-path callback))
-      (push (lambda ()
-              (cl-incf typst-overlay--active-compiles)
-              (typst-overlay--start-async-compile source svg-path callback))
-            typst-overlay--compile-queue))))
+(defun typst-overlay--start-renders (elements generation artifact-cache)
+  "Start async renders for ELEMENTS at GENERATION.
+They are spread evenly over at most `typst-overlay-max-active-compiles'
+batches, which run in parallel.  ARTIFACT-CACHE receives the results."
+  (when elements
+    (let* ((jobs (mapcar
+                  (lambda (element)
+                    (make-typst-overlay-job
+                     :element element
+                     :generation generation
+                     :svg-path (typst-overlay--artifact-svg-path
+                                (typst-overlay-element-cache-key element))
+                     ;; Markers follow edits made while compiling, so the
+                     ;; result can be placed where the equation is by then.
+                     :markers (typst-overlay--element-markers element)))
+                  elements))
+           (size (ceiling (length jobs)
+                          (float (max 1 typst-overlay-max-active-compiles)))))
+      (dolist (batch (seq-split jobs size))
+        (typst-overlay--queue-batch batch artifact-cache)))))
 
-(defun typst-overlay--start-async-compile (source svg-path callback)
-  "Compile SOURCE to SVG-PATH asynchronously, then call CALLBACK.
-CALLBACK receives the symbol `success' or `failure', and the
-compiler's output.  `default-directory' must be bound by the caller
-to resolve #import paths."
-  (let ((buffer (generate-new-buffer " *typst-overlay-compile*")))
-    (make-process
-     :name "typst-overlay-compile"
-     :buffer buffer
-     :command (list "typst" "compile" "-" svg-path "--format" "svg")
-     :connection-type 'pipe
-     :noquery t
-     :sentinel
-     (lambda (proc _event)
-       (when (memq (process-status proc) '(exit signal))
-         (let ((ok (and (= (process-exit-status proc) 0)
-                        (file-exists-p svg-path)
-                        (not (file-directory-p svg-path)))))
-           (unwind-protect
-               (funcall callback
-                        (if ok 'success 'failure)
-                        (with-current-buffer (process-buffer proc)
-                          (buffer-string)))
-             (when (buffer-live-p (process-buffer proc))
-               (kill-buffer (process-buffer proc))))))))
-    (let ((proc (get-buffer-process buffer)))
-      (process-send-string proc source)
-      (process-send-eof proc)
-      proc)))
+(defun typst-overlay--queue-batch (jobs artifact-cache)
+  "Compile JOBS as one batch, now or once a compile slot is free.
+ARTIFACT-CACHE receives the results."
+  (let* ((buffer (current-buffer))
+         (session typst-overlay--session)
+         (start (lambda ()
+                  (cl-incf typst-overlay--active-compiles)
+                  (typst-overlay--run-batch jobs artifact-cache buffer session))))
+    (if (< typst-overlay--active-compiles typst-overlay-max-active-compiles)
+        (funcall start)
+      (setq typst-overlay--compile-queue
+            (nconc typst-overlay--compile-queue (list start))))))
+
+(defun typst-overlay--run-batch (jobs artifact-cache buffer session)
+  "Compile JOBS of BUFFER into a temporary folder in the cache.
+ARTIFACT-CACHE receives the results.  SESSION is the
+`typst-overlay--session' the batch belongs to."
+  (let* ((source (typst-overlay--batch-source jobs))
+         (cache-dir (file-name-directory
+                     (typst-overlay-job-svg-path (car jobs))))
+         (dir (make-temp-file (expand-file-name "batch-" cache-dir) t))
+         ;; Resolve #import paths relative to the buffer's file.
+         (default-directory (file-name-directory (buffer-file-name buffer))))
+    (typst-overlay--compile-async
+     (car source) dir
+     (lambda (ok output)
+       (unwind-protect
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (typst-overlay--finish-batch
+                jobs (cdr source) dir ok output artifact-cache session)))
+         (delete-directory dir t))))))
+
+(defun typst-overlay--compile-async (source dir callback)
+  "Compile SOURCE asynchronously to one SVG per page in DIR.
+Pages are written as 1.svg, 2.svg, and so on.  CALLBACK receives
+whether the compile succeeded and typst's output."
+  (let* ((buffer (generate-new-buffer " *typst-overlay-compile*" t))
+         (proc (make-process
+                :name "typst-overlay-compile"
+                :buffer buffer
+                :command (list "typst" "compile" "--diagnostic-format" "short"
+                               "--format" "svg"
+                               "-" (expand-file-name "{p}.svg" dir))
+                :connection-type 'pipe
+                :noquery t
+                :sentinel
+                (lambda (proc _event)
+                  (when (memq (process-status proc) '(exit signal))
+                    (unwind-protect
+                        (funcall callback
+                                 (= (process-exit-status proc) 0)
+                                 (with-current-buffer (process-buffer proc)
+                                   (buffer-string)))
+                      (when (buffer-live-p (process-buffer proc))
+                        (kill-buffer (process-buffer proc)))))))))
+    (process-send-string proc source)
+    (process-send-eof proc)
+    proc))
+
+(defun typst-overlay--finish-batch (jobs lines dir ok output artifact-cache session)
+  "Handle a finished batch of JOBS, with LINES from its source.
+DIR holds its pages, OK and OUTPUT are the compile result.
+ARTIFACT-CACHE receives the results.  Batches from before a teardown,
+whose SESSION is outdated, are ignored."
+  (if (/= session typst-overlay--session)
+      (dolist (job jobs)
+        (typst-overlay--release-job job))
+    (cl-decf typst-overlay--active-compiles)
+    (let ((pages (typst-overlay--batch-pages dir))
+          (location (and (not ok) (typst-overlay--compile-error-location output)))
+          failed)
+      (cond
+       ;; Success: each page goes to its job's cache file.
+       ((and ok (= (length pages) (length jobs)))
+        (cl-loop for job in jobs
+                 for page from 1
+                 do (rename-file (alist-get page pages)
+                                 (typst-overlay-job-svg-path job) t)
+                    (typst-overlay--finish-job job artifact-cache nil)))
+       ;; A traceable error: fail those jobs, compile the rest again.
+       ((and location
+             (setq failed (typst-overlay--failed-jobs
+                           jobs lines (car location))))
+        (dolist (job failed)
+          (typst-overlay--finish-job job artifact-cache (cdr location)))
+        (let ((rest (seq-difference jobs failed #'eq)))
+          (when rest
+            (typst-overlay--queue-batch rest artifact-cache))))
+       ;; Anything else: compile each equation on its own.
+       ((cdr jobs)
+        (dolist (job jobs)
+          (typst-overlay--queue-batch (list job) artifact-cache)))
+       (t
+        (typst-overlay--finish-job
+         (car jobs) artifact-cache
+         (typst-overlay--compile-error-summary output)))))
+    (typst-overlay--drain-compile-queue)))
+
+(defun typst-overlay--release-job (job)
+  "Release JOB's markers."
+  (let ((markers (typst-overlay-job-markers job)))
+    (set-marker (car markers) nil)
+    (set-marker (cdr markers) nil)))
+
+(defun typst-overlay--finish-job (job artifact-cache error)
+  "Show the result of JOB: its SVG, or ERROR if non-nil.
+ARTIFACT-CACHE receives a successful result."
+  (let* ((element (typst-overlay-job-element job))
+         (current (typst-overlay--relocate-element
+                   element (typst-overlay-job-markers job))))
+    (typst-overlay--release-job job)
+    (if error
+        (typst-overlay--handle-render-failure
+         element current (typst-overlay-job-generation job) error)
+      (typst-overlay--handle-render-success
+       element current (typst-overlay-job-generation job)
+       (typst-overlay-element-cache-key element)
+       (typst-overlay-job-svg-path job) artifact-cache))))
 
 (defun typst-overlay--element-markers (element)
   "Return markers (BEG . END) around ELEMENT that follow later edits.
@@ -1083,21 +1247,21 @@ CACHE-KEY, SVG-PATH and ARTIFACT-CACHE describe the new artifact."
                 (typst-overlay-record-overlay record) nil))))))
 
 (defun typst-overlay--compile-error-summary (output)
-  "Return the first error line of typst OUTPUT, without its prefix."
+  "Return the message of the first error in typst OUTPUT."
   (let ((lines (split-string output "\n" t "[ \t]+")))
     (or (seq-some (lambda (line)
-                    (and (string-prefix-p "error: " line)
-                         (substring line (length "error: "))))
+                    (and (string-match "\\(?:\\`\\|: \\)error: \\(.*\\)" line)
+                         (match-string 1 line)))
                   lines)
         (car lines)
         "Compilation failed")))
 
-(defun typst-overlay--handle-render-failure (element current generation output)
+(defun typst-overlay--handle-render-failure (element current generation message)
   "Mark ELEMENT failed if its record still matches GENERATION.
 CURRENT is ELEMENT at its position now, or nil if its text changed
 while compiling.  If CURRENT is non-nil, underline it with face
-`typst-overlay-error' and attach the error from typst OUTPUT, which
-is shown when point enters the equation."
+`typst-overlay-error' and attach the error MESSAGE, which is shown
+when point enters the equation."
   (when typst-overlay-mode
     (let ((record (typst-overlay--get-record typst-overlay--registry element)))
       (when (and record
@@ -1106,8 +1270,7 @@ is shown when point enters the equation."
         (setf (typst-overlay-record-state record) 'failed
               (typst-overlay-record-overlay record)
               (and current
-                   (typst-overlay--place-error-overlay
-                    current (typst-overlay--compile-error-summary output))))))))
+                   (typst-overlay--place-error-overlay current message)))))))
 
 (defun typst-overlay--place-error-overlay (element message)
   "Create and return an overlay marking ELEMENT as failed with MESSAGE."
