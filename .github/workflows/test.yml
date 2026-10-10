@@ -41,3 +41,30 @@ jobs:
 
       - name: Run tests
         run: emacs --batch -Q -L . -l test/typst-overlay-test.el -f ert-run-tests-batch-and-exit
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: purcell/setup-emacs@v8.0
+        with:
+          version: '31.1'
+
+      - name: Install package-lint
+        run: |
+          emacs --batch -Q --eval "(progn
+            (require 'package)
+            (add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\") t)
+            (package-initialize)
+            (package-refresh-contents)
+            (package-install 'package-lint))"
+
+      - name: package-lint
+        run: emacs --batch -Q --eval "(progn (package-initialize) (require 'package-lint))" -f package-lint-batch-and-exit typst-overlay.el
+
+      # checkdoc only prints warnings, so fail if it prints anything.
+      - name: checkdoc
+        run: |
+          out=$(emacs --batch -Q --eval '(checkdoc-file "typst-overlay.el")' 2>&1)
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi

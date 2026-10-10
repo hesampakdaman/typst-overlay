@@ -6,7 +6,7 @@
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: tools
 ;; URL: https://github.com/hesampakdaman/typst-overlay
-;; Assisted-by: Claude:claude-sonnet-4-6
+;; Assisted-by: Claude:claude-sonnet-4-6, Claude:claude-opus-5-5
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
