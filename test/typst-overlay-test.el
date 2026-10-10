@@ -77,7 +77,10 @@ The case name is part of the compared value so failures show it."
     ("escaped dollar inside math" "$a \\$ b$ c" ("$a \\$ b$"))
     ("half-open interval" "an $[0, 1)$ interval" ("$[0, 1)$"))
     ("variable in math" "$#x$ var" ("$#x$"))
-    ("unclosed outer, inner math only" "$#table($x$ unclosed" ("$x$"))
+    ("unclosed outer: found up to the next $" "$#table($x$ unclosed" ("$#table($"))
+    ("syntax error: unclosed parenthesis" "a $frac(1, 2$ b" ("$frac(1, 2$"))
+    ("syntax error: unclosed string" "a $ \"oops $ b" ("$ \"oops $"))
+    ("syntax error: keyword without body" "a $#let$ b" ("$#let$"))
     ;; Not detected
     ("escaped dollars" "costs \\$5 and \\$6" ())
     ("escaped dollars before words" "use \\$a or \\$b" ())
@@ -473,6 +476,55 @@ texts with an artifact in the cache, and NEW the current elements.")
                          "#let k = 1"))
           (should (equal (line (1- (typst-overlay-job-lines-end second))) "$"))
           (should (equal (line (typst-overlay-job-lines-end second)) "]")))))))
+
+(ert-deftest typst-overlay-test-failed-jobs ()
+  "An error is traced to its job, or to every job sharing a prelude."
+  (let* ((typst-overlay-extra-prelude "")
+         (shared (list (make-typst-overlay-code-node
+                        :beg 1 :end 2 :text "#let f = 2" :hash "")))
+         (make (lambda (beg text prelude)
+                 (make-typst-overlay-job
+                  :element (typst-overlay--make-element
+                            (make-typst-overlay-math-node
+                             :beg beg :end (+ beg (length text))
+                             :text text :text-hash (md5 text))
+                            prelude))))
+         (jobs (list (funcall make 1 "$a$" nil)
+                     (funcall make 10 "$b$" nil)
+                     (funcall make 20 "$c$" shared)
+                     (funcall make 30 "$d$" shared)))
+         (lines (cdr (typst-overlay--batch-source jobs))))
+    (cl-flet ((failed (job-index field)
+                (mapcar (lambda (job)
+                          (typst-overlay-element-text (typst-overlay-job-element job)))
+                        (typst-overlay--failed-jobs
+                         jobs lines (funcall field (nth job-index lines))))))
+      ;; An error on a job's "#[" line belongs to that job only, even
+      ;; when it has no prelude.
+      (should (equal (failed 1 #'typst-overlay-job-lines-beg) '("$b$")))
+      ;; An error in its math belongs to that job only.
+      (should (equal (failed 2 #'typst-overlay-job-lines-end) '("$c$")))
+      ;; An error in a prelude fails every job sharing it.
+      (should (equal (failed 2 #'typst-overlay-job-lines-prelude-end)
+                     '("$c$" "$d$"))))))
+
+(ert-deftest typst-overlay-test-job-error ()
+  "A job's error is the innermost one reported within its lines."
+  (let ((errors (typst-overlay--compile-errors
+                 (concat "<stdin>:10:1: error: unclosed delimiter\n"
+                         "<stdin>:11:0: error: unclosed delimiter\n"
+                         "<stdin>:11:2: error: unclosed string\n"
+                         "<stdin>:20:3: error: elsewhere\n"
+                         "other.typ:1:1: error: in an imported file\n"))))
+    (should (equal errors '((10 . "unclosed delimiter")
+                            (11 . "unclosed delimiter")
+                            (11 . "unclosed string")
+                            (20 . "elsewhere"))))
+    (should (equal (typst-overlay--job-error
+                    errors (make-typst-overlay-job-lines :beg 10 :prelude-end 10 :end 12))
+                   "unclosed string"))
+    (should-not (typst-overlay--job-error
+                 errors (make-typst-overlay-job-lines :beg 13 :prelude-end 13 :end 15)))))
 
 (defun typst-overlay-test--page-count (source)
   "Return how many pages SOURCE produces."

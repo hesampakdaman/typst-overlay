@@ -302,6 +302,14 @@ nil if no math starts at BEG or it does not parse cleanly."
     (memq (org-element-type (org-element-context))
           typst-overlay--org-code-types)))
 
+(defun typst-overlay--org-find-closing (limit)
+  "Return the position after the next unescaped $ before LIMIT, or nil.
+Search from point."
+  (catch 'found
+    (while (search-forward "$" limit t)
+      (unless (typst-overlay--escaped-p (1- (point)))
+        (throw 'found (point))))))
+
 (defun typst-overlay--analyze-org ()
   "Collect $...$ spans in an org buffer as Typst math.
 
@@ -311,6 +319,11 @@ decided by the Typst tree-sitter grammar.  So math may be written
 with or without surrounding whitespace (Typst decides inline vs.
 display from it) and may nest, as in $#table($x$)$.  Write \\$ for a
 literal dollar sign.
+
+If the grammar finds no math at a dollar sign, for example because
+the math has a syntax error, it is paired with the next unescaped
+dollar sign instead.  The span is then compiled like any other, so
+its syntax error is reported and underlined.
 
 Math may cross lines but not the end of a paragraph (a blank line
 or heading), so a stray dollar sign cannot swallow the rest of the
@@ -322,9 +335,11 @@ that prose like \"$5 and $10\" is left alone."
       (goto-char (point-min))
       (while (search-forward "$" nil t)
         (let* ((beg (1- (point)))
+               (limit (typst-overlay--org-paragraph-end))
                (end (and (not (typst-overlay--escaped-p beg))
-                         (typst-overlay--org-math-end
-                          beg (typst-overlay--org-paragraph-end)))))
+                         (or (typst-overlay--org-math-end beg limit)
+                             (save-excursion
+                               (typst-overlay--org-find-closing limit))))))
           (if (and end
                    (> (- end beg) 2)
                    (not (memq (char-after end)
@@ -1014,13 +1029,29 @@ which lines of SOURCE belong to it."
         (cl-incf line (cl-count ?\n block))))
     (cons (apply #'concat (nreverse parts)) (nreverse lines))))
 
-(defun typst-overlay--compile-error-location (output)
-  "Return (LINE . MESSAGE) for the first error in typst OUTPUT, or nil.
+(defun typst-overlay--compile-errors (output)
+  "Return (LINE . MESSAGE) for each error in typst OUTPUT, in order.
 OUTPUT is in typst's short diagnostic format.  Only errors in the
 compiled source itself, not in imported files, have a location."
-  (when (string-match "^<stdin>:\\([0-9]+\\):[0-9]+: error: \\(.*\\)$" output)
-    (cons (string-to-number (match-string 1 output))
-          (match-string 2 output))))
+  (let ((start 0) errors)
+    (while (string-match "^<stdin>:\\([0-9]+\\):[0-9]+: error: \\(.*\\)$"
+                         output start)
+      (push (cons (string-to-number (match-string 1 output))
+                  (match-string 2 output))
+            errors)
+      (setq start (match-end 0)))
+    (nreverse errors)))
+
+(defun typst-overlay--job-error (errors job-lines)
+  "Return the message of the last of ERRORS within JOB-LINES, or nil.
+A syntax error is reported from the outside in, starting with the
+unclosed delimiters around it, so the last one is the actual cause."
+  (cdr (car (last (seq-filter
+                   (lambda (error)
+                     (<= (typst-overlay-job-lines-beg job-lines)
+                         (car error)
+                         (typst-overlay-job-lines-end job-lines)))
+                   errors)))))
 
 (defun typst-overlay--failed-jobs (jobs lines line)
   "Return the JOBS that fail because of an error at LINE, or nil.
@@ -1036,7 +1067,11 @@ prelude fails every job with the same prelude."
       (let* ((job (nth index jobs))
              (prelude-hash (typst-overlay-element-prelude-hash
                             (typst-overlay-job-element job))))
-        (if (<= line (typst-overlay-job-lines-prelude-end (nth index lines)))
+        ;; The prelude starts after the block's opening "#[" line; an
+        ;; error on that line itself comes from the job's own content.
+        (if (< (typst-overlay-job-lines-beg (nth index lines))
+               line
+               (1+ (typst-overlay-job-lines-prelude-end (nth index lines))))
             (seq-filter (lambda (other)
                           (equal (typst-overlay-element-prelude-hash
                                   (typst-overlay-job-element other))
@@ -1152,9 +1187,10 @@ whose SESSION is outdated, are ignored."
       (dolist (job jobs)
         (typst-overlay--release-job job))
     (cl-decf typst-overlay--active-compiles)
-    (let ((pages (typst-overlay--batch-pages dir))
-          (location (and (not ok) (typst-overlay--compile-error-location output)))
-          failed)
+    (let* ((pages (typst-overlay--batch-pages dir))
+           (errors (and (not ok) (typst-overlay--compile-errors output)))
+           (location (car errors))
+           failed)
       (cond
        ;; Success: each page goes to its job's cache file.
        ((and ok (= (length pages) (length jobs)))
@@ -1168,7 +1204,11 @@ whose SESSION is outdated, are ignored."
              (setq failed (typst-overlay--failed-jobs
                            jobs lines (car location))))
         (dolist (job failed)
-          (typst-overlay--finish-job job artifact-cache (cdr location)))
+          (typst-overlay--finish-job
+           job artifact-cache
+           (or (typst-overlay--job-error
+                errors (nth (cl-position job jobs) lines))
+               (cdr location))))
         (let ((rest (seq-difference jobs failed #'eq)))
           (when rest
             (typst-overlay--queue-batch rest artifact-cache))))
@@ -1179,7 +1219,8 @@ whose SESSION is outdated, are ignored."
        (t
         (typst-overlay--finish-job
          (car jobs) artifact-cache
-         (typst-overlay--compile-error-summary output)))))
+         (or (typst-overlay--job-error errors (car lines))
+             (typst-overlay--compile-error-summary output))))))
     (typst-overlay--drain-compile-queue)))
 
 (defun typst-overlay--release-job (job)
