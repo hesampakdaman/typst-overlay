@@ -195,7 +195,8 @@ The case name is part of the compared value so failures show it."
 (defun typst-overlay-test--registry (old)
   "Return a registry with a record for each (BEG TEXT STATE) in OLD.
 Records that are `visible' or `stale' have an artifact; only
-`visible' ones have an overlay, represented by a placeholder."
+`visible' ones have an overlay, represented by a placeholder.  The
+pseudo-state `stale-no-artifact' is a `stale' record without one."
   (let ((registry (typst-overlay--make-registry)))
     (dolist (spec old)
       (pcase-let* ((`(,beg ,text ,state) spec)
@@ -204,7 +205,7 @@ Records that are `visible' or `stale' have an artifact; only
          registry element
          (make-typst-overlay-record
           :element element
-          :state state
+          :state (if (eq state 'stale-no-artifact) 'stale state)
           :overlay (and (eq state 'visible) 'overlay)
           :artifact (and (memq state '(visible stale))
                          (typst-overlay-test--artifact element))
@@ -251,8 +252,11 @@ Records that are `visible' or `stale' have an artifact; only
     ("edited: old removed, new compiled"
      ((1 "$a$" visible)) () ((1 "$b$"))
      (:delete (1) :place () :render (1)))
-    ("stale: compiled again"
+    ("stale with image: image reused"
      ((1 "$a$" stale)) () ((1 "$a$"))
+     (:delete () :place (1) :render ()))
+    ("stale without image: compiled"
+     ((1 "$a$" stale-no-artifact)) () ((1 "$a$"))
      (:delete () :place () :render (1)))
     ("failed and unchanged: not retried"
      ((1 "$a$" failed)) () ((1 "$a$"))

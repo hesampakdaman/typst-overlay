@@ -601,9 +601,7 @@ Cases:
                 (record (typst-overlay--get-record registry old-element))
                 (artifact (and record (typst-overlay-record-artifact record)))
                 (overlay (and record (typst-overlay-record-overlay record))))
-           (when (and artifact
-                      (null overlay)
-                      (not (eq (typst-overlay-record-state record) 'stale)))
+           (when (and artifact (null overlay))
              (push (make-typst-overlay-place-op
                     :old old-element
                     :new new-element
@@ -640,10 +638,9 @@ Cases:
 Covers entries that do not have a reusable artifact.
 
 Cases:
-- moved + old record has no artifact -> render-op
-- added + artifact cache miss        -> render-op
-
-Unchanged entries are no-op."
+- moved + old record has no artifact      -> render-op
+- added + artifact cache miss             -> render-op
+- unchanged + stale record has no artifact -> render-op"
   (let (ops)
     (dolist (entry (typst-overlay-diff-entries diff))
       (pcase (typst-overlay-diff-entry-status entry)
@@ -652,7 +649,8 @@ Unchanged entries are no-op."
                 (new-element (typst-overlay-diff-entry-new entry))
                 (record (typst-overlay--get-record registry old-element)))
            (when (and record
-                      (eq (typst-overlay-record-state record) 'stale))
+                      (eq (typst-overlay-record-state record) 'stale)
+                      (null (typst-overlay-record-artifact record)))
              (push (make-typst-overlay-render-op
                     :old old-element
                     :new new-element)
