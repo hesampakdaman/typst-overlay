@@ -357,6 +357,82 @@ texts with an artifact in the cache, and NEW the current elements.")
                                       (cons (typst-overlay-element-beg current)
                                             (typst-overlay-element-end current))))))))))))
 
+;;; Compile errors
+
+(defconst typst-overlay-test--error-summary-cases
+  '(("real typst output"
+     "error: unknown variable: ac\n  ┌─ <stdin>:4:1\n  │\n4 │ $ac$\n  │  ^^\n  │\n  = hint: try adding spaces between each letter: `a c`\n"
+     "unknown variable: ac")
+    ("warning before the error"
+     "warning: unused import\nerror: expected expression\n"
+     "expected expression")
+    ("no error prefix" "\n  something odd happened\n" "something odd happened")
+    ("no output" "" "Compilation failed"))
+  "Error summary cases: (NAME OUTPUT EXPECTED).")
+
+(ert-deftest typst-overlay-test-error-summary ()
+  "The first error line is extracted from typst's output."
+  (dolist (case typst-overlay-test--error-summary-cases)
+    (pcase-let ((`(,name ,output ,expected) case))
+      (should (equal (list name expected)
+                     (list name (typst-overlay--compile-error-summary output)))))))
+
+(defun typst-overlay-test--failed-record (element generation)
+  "Return a registry holding a rendering record for ELEMENT at GENERATION."
+  (let ((registry (typst-overlay--make-registry)))
+    (typst-overlay--put-record
+     registry element
+     (make-typst-overlay-record :element element :state 'rendering
+                                :generation generation))
+    registry))
+
+(ert-deftest typst-overlay-test-render-failure ()
+  "A failed render underlines the equation, unless it is outdated."
+  (with-temp-buffer
+    (insert "Bad $ac$ end.")
+    (setq-local typst-overlay-mode t)
+    (let ((element (typst-overlay-test--element 5 "$ac$")))
+      ;; Current generation: marked failed and underlined.
+      (setq typst-overlay--registry (typst-overlay-test--failed-record element 1))
+      (typst-overlay--handle-render-failure
+       element element 1 "error: unknown variable: ac\n")
+      (let* ((record (typst-overlay--get-record typst-overlay--registry element))
+             (overlay (typst-overlay-record-overlay record)))
+        (should (eq (typst-overlay-record-state record) 'failed))
+        (should (equal (buffer-substring (overlay-start overlay) (overlay-end overlay))
+                       "$ac$"))
+        (should (eq (overlay-get overlay 'face) 'typst-overlay-error))
+        (should (equal (overlay-get overlay 'typst-overlay-error)
+                       "unknown variable: ac")))
+      ;; Text changed while compiling: failed, but nothing to underline.
+      (remove-overlays)
+      (setq typst-overlay--registry (typst-overlay-test--failed-record element 1))
+      (typst-overlay--handle-render-failure element nil 1 "error: x\n")
+      (should-not (typst-overlay-record-overlay
+                   (typst-overlay--get-record typst-overlay--registry element)))
+      ;; Outdated generation: left alone.
+      (setq typst-overlay--registry (typst-overlay-test--failed-record element 2))
+      (typst-overlay--handle-render-failure element element 1 "error: x\n")
+      (should (eq (typst-overlay-record-state
+                   (typst-overlay--get-record typst-overlay--registry element))
+                  'rendering)))))
+
+(ert-deftest typst-overlay-test-error-shown-once ()
+  "The error is shown when point enters the equation, not on every command."
+  (with-temp-buffer
+    (insert "Bad $ac$ end.")
+    (typst-overlay--place-error-overlay
+     (typst-overlay-test--element 5 "$ac$") "unknown variable: ac")
+    (let (shown)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args) (push (apply #'format fmt args) shown))))
+        (dolist (pos '(1 6 7 6 1 7))    ; outside, inside x3, outside, inside
+          (goto-char pos)
+          (typst-overlay--echo-error-at-point)))
+      (should (equal (reverse shown)
+                     '("Typst: unknown variable: ac"
+                       "Typst: unknown variable: ac"))))))
+
 (provide 'typst-overlay-test)
 
 ;;; typst-overlay-test.el ends here

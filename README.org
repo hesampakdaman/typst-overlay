@@ -5,6 +5,8 @@
 
 Render Typst math equations as inline overlays in Emacs. Equations are asynchronously compiled to SVG using the =typst= compiler and displayed on top of the source text. Overlays are visible when the cursor is outside the equation and hidden when the cursor moves inside, revealing the raw source for editing. Overlays are invalidated when the underlying text is modified and restored on the next refresh.
 
+Equations that fail to compile are underlined (face =typst-overlay-error=); move point into one, or hover over it, to see the error.
+
 ** Requirements
 - Emacs 29.1 or later
 - [[https://typst.app][typst]] compiler available on =PATH=

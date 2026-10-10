@@ -70,12 +70,21 @@
   :type 'string
   :group 'typst-overlay)
 
+(defface typst-overlay-error
+  '((((supports :underline (:style wave)))
+     :underline (:style wave :color "Red1"))
+    (t :inherit error))
+  "Face for equations that failed to compile."
+  :group 'typst-overlay)
+
 ;; constants / buffer-local state
 (defconst typst-overlay--grammar-url "https://github.com/uben0/tree-sitter-typst"
   "Source of the Typst tree-sitter grammar.")
 
 (defvar-local typst-overlay--snapshot nil)
 (defvar-local typst-overlay--active-overlay nil)
+(defvar-local typst-overlay--shown-error-overlay nil
+  "Error overlay whose message was last shown, to show it only once.")
 (defvar-local typst-overlay--registry nil)
 (defvar-local typst-overlay--artifact-cache nil)
 (defvar-local typst-overlay--compile-queue nil)
@@ -826,9 +835,20 @@ the result."
       (when image
         (overlay-put overlay 'display image)))))
 
+(defun typst-overlay--echo-error-at-point ()
+  "Show the error of a failed equation when point enters it.
+The message is shown once per entry, not after every command."
+  (let ((overlay (seq-find (lambda (ov) (overlay-get ov 'typst-overlay-error))
+                           (overlays-at (point)))))
+    (unless (eq overlay typst-overlay--shown-error-overlay)
+      (setq typst-overlay--shown-error-overlay overlay)
+      (when overlay
+        (message "Typst: %s" (overlay-get overlay 'typst-overlay-error))))))
+
 (defun typst-overlay--post-command-update ()
   "Hide overlay under point and restore the previously active one."
   (typst-overlay--handle-upward-entry)
+  (typst-overlay--echo-error-at-point)
   (let ((current (typst-overlay--overlay-at-point))
         (active typst-overlay--active-overlay))
     (unless (eq current active)
@@ -907,7 +927,8 @@ the result."
         typst-overlay--active-compiles 0)
   (when (overlayp typst-overlay--active-overlay)
     (typst-overlay--show-overlay typst-overlay--active-overlay))
-  (setq typst-overlay--active-overlay nil)
+  (setq typst-overlay--active-overlay nil
+        typst-overlay--shown-error-overlay nil)
   (when typst-overlay--registry
     (maphash
      (lambda (_key record)
@@ -959,7 +980,7 @@ ARTIFACT-CACHE receives the result.  Respects the concurrency limit."
          ;; Markers follow edits made while the compile runs, so the
          ;; result can be placed where the equation is by then.
          (markers (typst-overlay--element-markers element))
-         (callback (lambda (status)
+         (callback (lambda (status output)
                      (when (buffer-live-p buffer)
                        (with-current-buffer buffer
                          (let ((current (typst-overlay--relocate-element
@@ -973,22 +994,21 @@ ARTIFACT-CACHE receives the result.  Respects the concurrency limit."
                                 element current generation
                                 cache-key svg-path artifact-cache)
                              (typst-overlay--handle-render-failure
-                              element generation))))))))
+                              element current generation output))))))))
     (if (< typst-overlay--active-compiles typst-overlay-max-active-compiles)
         (progn
           (cl-incf typst-overlay--active-compiles)
-          (typst-overlay--start-async-compile source svg-path element callback))
+          (typst-overlay--start-async-compile source svg-path callback))
       (push (lambda ()
               (cl-incf typst-overlay--active-compiles)
-              (typst-overlay--start-async-compile source svg-path element callback))
+              (typst-overlay--start-async-compile source svg-path callback))
             typst-overlay--compile-queue))))
 
-(defun typst-overlay--start-async-compile
-    (source svg-path element callback)
+(defun typst-overlay--start-async-compile (source svg-path callback)
   "Compile SOURCE to SVG-PATH asynchronously, then call CALLBACK.
-ELEMENT is the element being rendered, used to name the error buffer.
-CALLBACK receives either the symbol `success' or `failure'.
-`default-directory' must be bound by the caller to resolve #import paths."
+CALLBACK receives the symbol `success' or `failure', and the
+compiler's output.  `default-directory' must be bound by the caller
+to resolve #import paths."
   (let ((buffer (generate-new-buffer " *typst-overlay-compile*")))
     (make-process
      :name "typst-overlay-compile"
@@ -1002,15 +1022,11 @@ CALLBACK receives either the symbol `success' or `failure'.
          (let ((ok (and (= (process-exit-status proc) 0)
                         (file-exists-p svg-path)
                         (not (file-directory-p svg-path)))))
-           (unless ok
-             (with-current-buffer (process-buffer proc)
-               (rename-buffer
-                (format "*typst-overlay-error:%s*"
-                        (truncate-string-to-width
-                         (typst-overlay-element-text element) 20 nil nil t))
-                t)))
            (unwind-protect
-               (funcall callback (if ok 'success 'failure))
+               (funcall callback
+                        (if ok 'success 'failure)
+                        (with-current-buffer (process-buffer proc)
+                          (buffer-string)))
              (when (buffer-live-p (process-buffer proc))
                (kill-buffer (process-buffer proc))))))))
     (let ((proc (get-buffer-process buffer)))
@@ -1061,13 +1077,44 @@ CACHE-KEY, SVG-PATH and ARTIFACT-CACHE describe the new artifact."
           (setf (typst-overlay-record-state record) 'stale
                 (typst-overlay-record-overlay record) nil))))))
 
-(defun typst-overlay--handle-render-failure (element generation)
-  "Mark ELEMENT failed if its record still matches GENERATION."
+(defun typst-overlay--compile-error-summary (output)
+  "Return the first error line of typst OUTPUT, without its prefix."
+  (let ((lines (split-string output "\n" t "[ \t]+")))
+    (or (seq-some (lambda (line)
+                    (and (string-prefix-p "error: " line)
+                         (substring line (length "error: "))))
+                  lines)
+        (car lines)
+        "Compilation failed")))
+
+(defun typst-overlay--handle-render-failure (element current generation output)
+  "Mark ELEMENT failed if its record still matches GENERATION.
+CURRENT is ELEMENT at its position now, or nil if its text changed
+while compiling.  If CURRENT is non-nil, underline it with face
+`typst-overlay-error' and attach the error from typst OUTPUT, which
+is shown when point enters the equation."
   (when typst-overlay-mode
     (let ((record (typst-overlay--get-record typst-overlay--registry element)))
       (when (and record
                  (= (typst-overlay-record-generation record) generation))
-        (setf (typst-overlay-record-state record) 'failed)))))
+        (typst-overlay--delete-record-overlay record)
+        (setf (typst-overlay-record-state record) 'failed
+              (typst-overlay-record-overlay record)
+              (and current
+                   (typst-overlay--place-error-overlay
+                    current (typst-overlay--compile-error-summary output))))))))
+
+(defun typst-overlay--place-error-overlay (element message)
+  "Create and return an overlay marking ELEMENT as failed with MESSAGE."
+  (let ((overlay (make-overlay (typst-overlay-element-beg element)
+                               (typst-overlay-element-end element)
+                               nil t nil)))
+    (overlay-put overlay 'face 'typst-overlay-error)
+    (overlay-put overlay 'typst-overlay-error message)
+    (overlay-put overlay 'help-echo message)
+    (overlay-put overlay 'evaporate t)
+    (overlay-put overlay 'modification-hooks '(typst-overlay--invalidate-overlay))
+    overlay))
 
 (defun typst-overlay--artifact-svg-path (cache-key)
   "Return the cached SVG path for CACHE-KEY in the current file's directory."
