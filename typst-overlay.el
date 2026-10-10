@@ -1093,9 +1093,9 @@ Intended for use in `after-save-hook'."
   (unless (executable-find "typst")
     (user-error "Binary typst not found in PATH"))
   (setq-local typst-overlay--analyzer
-              (pcase major-mode
-                ('org-mode #'typst-overlay--analyze-org)
-                (_ #'typst-overlay--analyze-typst)))
+              (if (derived-mode-p 'org-mode)
+                  #'typst-overlay--analyze-org
+                #'typst-overlay--analyze-typst))
   (typst-overlay--ensure-runtime)
   (setq typst-overlay--last-point (point))
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
