@@ -11,7 +11,7 @@ Render Typst math equations as inline overlays in Emacs. Equations are asynchron
 - Tree-sitter grammar for Typst (only required for =typst-ts-mode= buffers)
 
 ** Supported modes
-- =org-mode= — renders =$...$= as Typst math
+- =org-mode= — renders =$...$= as Typst math, following Typst's rules: =$x$= is inline and =$ x $= is display. Write =\$= for a literal dollar sign. Math may span lines within a paragraph, and is ignored in code, verbatim and src blocks.
 - =typst-ts-mode= — renders all math equations in Typst documents
 
 ** Installation

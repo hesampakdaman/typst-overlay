@@ -38,6 +38,9 @@
 (require 'subr-x)
 (require 'treesit)
 
+(declare-function org-element-context "org-element" (&optional element))
+(declare-function org-element-type "org-element-ast" (node &optional anonymous))
+
 (defvar typst-overlay-mode)
 
 ;; customization
@@ -215,30 +218,79 @@ Math nodes that appear after a parse error in the document are excluded."
                   (typst-overlay--collect-math-nodes root first-error))
      :first-error first-error)))
 
+(defconst typst-overlay--org-code-types
+  '(src-block example-block export-block fixed-width comment comment-block
+    code verbatim inline-src-block keyword)
+  "Org element types whose contents are never treated as math.")
+
+(defun typst-overlay--escaped-p (pos)
+  "Return non-nil if the character at POS is escaped by a backslash.
+A character is escaped when preceded by an odd number of backslashes."
+  (save-excursion
+    (goto-char pos)
+    (cl-oddp (- pos (progn (skip-chars-backward "\\\\") (point))))))
+
+(defun typst-overlay--org-paragraph-end ()
+  "Return the end of the paragraph at point.
+The paragraph ends at the next blank line or heading."
+  (save-excursion
+    (if (re-search-forward "\n[ \t]*\n\\|\n\\*+ " nil t)
+        (match-beginning 0)
+      (point-max))))
+
+(defun typst-overlay--org-find-closing (limit)
+  "Return the position after the next unescaped $ before LIMIT, or nil."
+  (catch 'found
+    (while (search-forward "$" limit t)
+      (unless (typst-overlay--escaped-p (1- (point)))
+        (throw 'found (point))))))
+
+(defun typst-overlay--org-in-code-p (pos)
+  "Return non-nil if POS is inside an org code or verbatim element."
+  (save-excursion
+    (goto-char pos)
+    (memq (org-element-type (org-element-context))
+          typst-overlay--org-code-types)))
+
 (defun typst-overlay--analyze-org ()
+  "Collect $...$ spans in an org buffer as Typst math.
+
+Follows Typst's delimiter rules rather than org's LaTeX ones: the
+span between two unescaped dollar signs is math, with or without
+surrounding whitespace, and Typst decides inline vs. display from
+that whitespace.  Write \\$ for a literal dollar sign.
+
+A span may cross lines but not the end of a paragraph (a blank line
+or heading), so a stray dollar sign cannot swallow the rest of the
+buffer.  Spans in code, verbatim and src blocks are skipped, as are
+empty spans and spans whose closing $ is followed by a digit, so
+that prose like \"$5 and $10\" is left alone."
   (let (math-nodes)
     (save-excursion
       (goto-char (point-min))
-      (while (re-search-forward
-             (concat "\\(\\$[^\n[:space:]]\\(?:[^$\n]*[^\n[:space:]]\\)?\\$" ; Inline math
-                     "\\|"
-                     "^[ \t]*\\$[ \t]*\n[^\0]*?\n[ \t]*\\$[ \t]*\\)") ; Display math
-             nil t)
-        (let* ((raw-beg (match-beginning 0))
-               (raw-end (match-end 0))
-               (text (match-string-no-properties 0))
-               (beg (if (string-prefix-p "\n" text) (1+ raw-beg) raw-beg))
-               (end (if (string-suffix-p "\n" text) (1- raw-end) raw-end))
-               (clean-text (string-trim text)))
-          (push (make-typst-overlay-math-node
-                 :beg beg
-                 :end end
-                 :text clean-text
-                 :text-hash (md5 clean-text))
-                math-nodes))))
+      (while (search-forward "$" nil t)
+        (let* ((beg (1- (point)))
+               (end (and (not (typst-overlay--escaped-p beg))
+                         (typst-overlay--org-find-closing
+                          (typst-overlay--org-paragraph-end)))))
+          (if (and end
+                   (> (- end beg) 2)
+                   (not (memq (char-after end)
+                              '(?0 ?1 ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9)))
+                   (not (typst-overlay--org-in-code-p beg)))
+              (let ((text (buffer-substring-no-properties beg end)))
+                (push (make-typst-overlay-math-node
+                       :beg beg
+                       :end end
+                       :text text
+                       :text-hash (md5 text))
+                      math-nodes)
+                (goto-char end))
+            ;; Not math: treat the opening $ as literal and move on.
+            (goto-char (1+ beg))))))
     (make-typst-overlay-analysis
      :code-nodes nil
-     :math-nodes (typst-overlay--sort-math-nodes (nreverse math-nodes))
+     :math-nodes (nreverse math-nodes)
      :first-error nil)))
 
 ;; snapshot
