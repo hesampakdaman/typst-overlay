@@ -1,0 +1,43 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 29.1 is the minimum in Package-Requires.
+        emacs-version: ['29.1', '30.2', '31.1']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: purcell/setup-emacs@v8.0
+        with:
+          version: ${{ matrix.emacs-version }}
+
+      - name: Build Typst tree-sitter grammar
+        env:
+          GRAMMAR_REV: 46cf4ded12ee974a70bf8457263b67ad7ee0379d
+        run: |
+          git clone --quiet https://github.com/uben0/tree-sitter-typst "$RUNNER_TEMP/tree-sitter-typst"
+          git -C "$RUNNER_TEMP/tree-sitter-typst" checkout --quiet "$GRAMMAR_REV"
+          mkdir -p ~/.emacs.d/tree-sitter
+          cc -shared -fPIC -O2 -I"$RUNNER_TEMP/tree-sitter-typst/src" \
+            "$RUNNER_TEMP/tree-sitter-typst/src/parser.c" \
+            "$RUNNER_TEMP/tree-sitter-typst/src/scanner.c" \
+            -o ~/.emacs.d/tree-sitter/libtree-sitter-typst.so
+
+      # Fail instead of silently skipping the Typst tests.
+      - name: Check grammar loads
+        run: emacs --batch -Q --eval "(unless (treesit-language-available-p 'typst) (kill-emacs 1))"
+
+      - name: Byte-compile
+        run: emacs --batch -Q -L . --eval "(setq byte-compile-error-on-warn t)" -f batch-byte-compile typst-overlay.el test/typst-overlay-test.el
+
+      - name: Run tests
+        run: emacs --batch -Q -L . -l test/typst-overlay-test.el -f ert-run-tests-batch-and-exit
