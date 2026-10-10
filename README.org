@@ -22,7 +22,7 @@ Equations that fail to compile are underlined (face =typst-overlay-error=); move
     :vc (:url "https://github.com/hesampakdaman/typst-overlay" :rev :newest)
     :custom
     ;; Optional: shown values are the defaults
-    (typst-overlay-scale 1.3)
+    (typst-overlay-scale 1.0)
     (typst-overlay-max-active-compiles 8)
     :hook ((typst-ts-mode . typst-overlay-mode)
            (after-save . typst-overlay-save-refresh)))
@@ -36,7 +36,7 @@ All options are available via =M-x customize-group RET typst-overlay=.
 |-------------------------------------+------------------------+--------------------------------------|
 | Variable                            | Default                | Description                          |
 |-------------------------------------+------------------------+--------------------------------------|
-| =typst-overlay-scale=               | =1.3=                  | Equation size relative to the text   |
+| =typst-overlay-scale=               | =1.0=                  | Equation size relative to the text   |
 | =typst-overlay-cache-dir-name=      | =.typst-overlay-cache= | Directory name for cached SVG files  |
 | =typst-overlay-max-active-compiles= | =8=                    | Max concurrent compilation processes |
 | =typst-overlay-extra-prelude=       | =""=                   | Extra typst prelude code             |
