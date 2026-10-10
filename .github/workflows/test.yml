@@ -32,7 +32,7 @@ jobs:
             "$RUNNER_TEMP/tree-sitter-typst/src/scanner.c" \
             -o ~/.emacs.d/tree-sitter/libtree-sitter-typst.so
 
-      # Fail instead of silently skipping the Typst tests.
+      # Fail instead of silently skipping the detection tests.
       - name: Check grammar loads
         run: emacs --batch -Q --eval "(unless (treesit-language-available-p 'typst) (kill-emacs 1))"
 

@@ -8,10 +8,10 @@ Render Typst math equations as inline overlays in Emacs. Equations are asynchron
 ** Requirements
 - Emacs 29.1 or later
 - [[https://typst.app][typst]] compiler available on =PATH=
-- Tree-sitter grammar for Typst (only required for =typst-ts-mode= buffers)
+- [[https://github.com/uben0/tree-sitter-typst][Tree-sitter grammar for Typst]], used to find equations in both modes. It is already installed if you use =typst-ts-mode=; otherwise run =M-x treesit-install-language-grammar=.
 
 ** Supported modes
-- =org-mode= — renders =$...$= as Typst math, following Typst's rules: =$x$= is inline and =$ x $= is display. Write =\$= for a literal dollar sign. Math may span lines within a paragraph, and is ignored in code, verbatim and src blocks.
+- =org-mode= — renders =$...$= as Typst math, following Typst's rules: =$x$= is inline and =$ x $= is display. Math may nest, as in =$#table($x$)$=. Write =\$= for a literal dollar sign. Math may span lines within a paragraph, and is ignored in code, verbatim and src blocks.
 - =typst-ts-mode= — renders all math equations in Typst documents
 
 ** Installation
@@ -44,7 +44,7 @@ All options are available via =M-x customize-group RET typst-overlay=.
 #+begin_src sh
   emacs --batch -Q -L . -l test/typst-overlay-test.el -f ert-run-tests-batch-and-exit
 #+end_src
-The Typst tests are skipped if the Typst tree-sitter grammar is not installed.
+The equation detection tests are skipped if the Typst tree-sitter grammar is not installed.
 
 ** Contributing
 Bug reports and patches are welcome.

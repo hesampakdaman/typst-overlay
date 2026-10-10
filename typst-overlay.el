@@ -18,8 +18,9 @@
 ;; while point is inside an equation, so you can edit the raw source,
 ;; and restored when point leaves.
 ;;
-;; Supported buffers: `typst-ts-mode' (via tree-sitter) and `org-mode'
-;; (where $...$ is treated as Typst math).
+;; Supported buffers: `typst-ts-mode' and `org-mode' (where $...$ is
+;; treated as Typst math).  Both use the Typst tree-sitter grammar to
+;; find equations.
 ;;
 ;; Usage:
 ;;
@@ -29,8 +30,8 @@
 ;; To refresh on save, add `typst-overlay-save-refresh' to
 ;; `after-save-hook'.
 ;;
-;; Requires the `typst' executable on PATH.  See `customize-group'
-;; `typst-overlay' for options.
+;; Requires the `typst' executable on PATH and the Typst tree-sitter
+;; grammar.  See `customize-group' `typst-overlay' for options.
 
 ;;; Code:
 (require 'cl-lib)
@@ -70,6 +71,9 @@
   :group 'typst-overlay)
 
 ;; constants / buffer-local state
+(defconst typst-overlay--grammar-url "https://github.com/uben0/tree-sitter-typst"
+  "Source of the Typst tree-sitter grammar.")
+
 (defvar-local typst-overlay--snapshot nil)
 (defvar-local typst-overlay--active-overlay nil)
 (defvar-local typst-overlay--registry nil)
@@ -245,12 +249,38 @@ The paragraph ends at the next blank line or heading."
         (match-beginning 0)
       (point-max))))
 
-(defun typst-overlay--org-find-closing (limit)
-  "Return the position after the next unescaped $ before LIMIT, or nil."
-  (catch 'found
-    (while (search-forward "$" limit t)
-      (unless (typst-overlay--escaped-p (1- (point)))
-        (throw 'found (point))))))
+(defvar typst-overlay--org-parse-buffer nil
+  "Hidden buffer reused to parse candidate equations in org buffers.
+Reusing one buffer and parser is several times faster than
+`treesit-parse-string', which creates both on every call.")
+
+(defun typst-overlay--org-parse-buffer ()
+  "Return the hidden Typst parse buffer, creating it if needed."
+  (unless (buffer-live-p typst-overlay--org-parse-buffer)
+    (setq typst-overlay--org-parse-buffer
+          (generate-new-buffer " *typst-overlay-parse*" t))
+    (with-current-buffer typst-overlay--org-parse-buffer
+      (buffer-disable-undo)
+      (treesit-parser-create 'typst)))
+  typst-overlay--org-parse-buffer)
+
+(defun typst-overlay--org-math-end (beg limit)
+  "Return the end of the Typst math starting at BEG, or nil.
+The text from BEG to LIMIT is parsed with the Typst tree-sitter
+grammar, so nested math such as $#table($x$)$ is handled.  Return
+nil if no math starts at BEG or it does not parse cleanly."
+  (let ((text (buffer-substring-no-properties beg limit)))
+    (with-current-buffer (typst-overlay--org-parse-buffer)
+      (erase-buffer)
+      (insert text)
+      (let ((node (treesit-node-descendant-for-range
+                   (treesit-buffer-root-node 'typst) 1 2)))
+        (while (and node (not (equal (treesit-node-type node) "math")))
+          (setq node (treesit-node-parent node)))
+        (when (and node
+                   (= (treesit-node-start node) 1)
+                   (not (treesit-node-check node 'has-error)))
+          (+ beg (1- (treesit-node-end node))))))))
 
 (defun typst-overlay--org-in-code-p (pos)
   "Return non-nil if POS is inside an org code or verbatim element."
@@ -262,12 +292,14 @@ The paragraph ends at the next blank line or heading."
 (defun typst-overlay--analyze-org ()
   "Collect $...$ spans in an org buffer as Typst math.
 
-Follows Typst's delimiter rules rather than org's LaTeX ones: the
-span between two unescaped dollar signs is math, with or without
-surrounding whitespace, and Typst decides inline vs. display from
-that whitespace.  Write \\$ for a literal dollar sign.
+Follows Typst's delimiter rules rather than org's LaTeX ones: each
+unescaped dollar sign may start Typst math, and where it ends is
+decided by the Typst tree-sitter grammar.  So math may be written
+with or without surrounding whitespace (Typst decides inline vs.
+display from it) and may nest, as in $#table($x$)$.  Write \\$ for a
+literal dollar sign.
 
-A span may cross lines but not the end of a paragraph (a blank line
+Math may cross lines but not the end of a paragraph (a blank line
 or heading), so a stray dollar sign cannot swallow the rest of the
 buffer.  Spans in code, verbatim and src blocks are skipped, as are
 empty spans and spans whose closing $ is followed by a digit, so
@@ -278,8 +310,8 @@ that prose like \"$5 and $10\" is left alone."
       (while (search-forward "$" nil t)
         (let* ((beg (1- (point)))
                (end (and (not (typst-overlay--escaped-p beg))
-                         (typst-overlay--org-find-closing
-                          (typst-overlay--org-paragraph-end)))))
+                         (typst-overlay--org-math-end
+                          beg (typst-overlay--org-paragraph-end)))))
           (if (and end
                    (> (- end beg) 2)
                    (not (memq (char-after end)
@@ -1086,10 +1118,21 @@ Intended for use in `after-save-hook'."
             (goto-char (1- (overlay-end typst-ov)))))))
     (setq typst-overlay--last-point curr-point)))
 
+(defun typst-overlay--missing-requirement ()
+  "Return a message describing a missing requirement, or nil."
+  (cond
+   ((not (executable-find "typst"))
+    "Binary typst not found in PATH")
+   ((not (treesit-language-available-p 'typst))
+    (format "Typst tree-sitter grammar not found; install it with `M-x treesit-install-language-grammar' from %s"
+            typst-overlay--grammar-url))))
+
 (defun typst-overlay--enable ()
   "Set up `typst-overlay-mode' in the current buffer."
-  (unless (executable-find "typst")
-    (user-error "Binary typst not found in PATH"))
+  (when-let* ((problem (typst-overlay--missing-requirement)))
+    ;; Leave the mode off rather than half set up.
+    (setq typst-overlay-mode nil)
+    (user-error "%s" problem))
   (setq-local typst-overlay--analyzer
               (if (derived-mode-p 'org-mode)
                   #'typst-overlay--analyze-org
