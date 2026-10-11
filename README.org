@@ -38,14 +38,7 @@ Turning on =flymake-mode= alongside =typst-overlay-mode= is recommended, as in t
 
 Errors are those of the last refresh, so they update when overlays are refreshed, for example on save.
 
-Eglot replaces a buffer's Flymake backends with its own. To keep equation errors in buffers managed by Eglot, for example with =tinymist=, add the backend back:
-#+begin_src emacs-lisp
-  (add-hook 'eglot-managed-mode-hook
-            (lambda ()
-              (when (bound-and-true-p typst-overlay-mode)
-                (add-hook 'flymake-diagnostic-functions
-                          #'typst-overlay-flymake nil t))))
-#+end_src
+This also works alongside Eglot, which normally replaces a buffer's Flymake backends with its own: the backend is added back when Eglot starts. With a Typst language server such as =tinymist=, a broken equation may then be reported by both.
 
 ** Configuration
 All options are available via =M-x customize-group RET typst-overlay=.

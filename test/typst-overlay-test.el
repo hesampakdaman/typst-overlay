@@ -23,6 +23,8 @@
 (require 'org)
 (require 'typst-overlay)
 
+(defvar eglot-managed-mode-hook)
+
 (defun typst-overlay-test--detect (setup input)
   "Insert INPUT, call SETUP, and return the detected equation texts.
 Also check that each node's region contains exactly its text."
@@ -766,6 +768,19 @@ counts of every compile started, in order."
       (should-not (diagnostics))
       (should-not (memq #'typst-overlay-flymake flymake-diagnostic-functions))
       (flymake-mode -1))))
+
+(ert-deftest typst-overlay-test-flymake-eglot ()
+  "The backend is added back when Eglot replaces the buffer's backends."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
+    ;; What Eglot does when it starts managing the buffer.
+    (setq-local flymake-diagnostic-functions '(eglot-flymake-backend))
+    (run-hooks 'eglot-managed-mode-hook)
+    (should (equal flymake-diagnostic-functions
+                   '(typst-overlay-flymake eglot-flymake-backend)))
+    (typst-overlay-mode -1)
+    (should-not (memq #'typst-overlay--add-flymake-backend
+                      eglot-managed-mode-hook))))
 
 ;;; Image size
 

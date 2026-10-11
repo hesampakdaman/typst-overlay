@@ -1521,6 +1521,12 @@ and keeps reporting as compiles finish."
 ;; buffers too.  See `trusted-content'.
 (put 'typst-overlay-flymake 'flymake-always-safe t)
 
+(defun typst-overlay--add-flymake-backend ()
+  "Add `typst-overlay-flymake' to the buffer's Flymake backends.
+Eglot replaces them with its own when it starts managing the buffer,
+so this runs again from `eglot-managed-mode-hook'."
+  (add-hook 'flymake-diagnostic-functions #'typst-overlay-flymake nil t))
+
 (defun typst-overlay--artifact-svg-path (cache-key)
   "Return the cached SVG path for CACHE-KEY in the current file's directory."
   (let* ((file (buffer-file-name))
@@ -1629,7 +1635,8 @@ Intended for use in `after-save-hook'."
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
   (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
-  (add-hook 'flymake-diagnostic-functions #'typst-overlay-flymake nil t)
+  (typst-overlay--add-flymake-backend)
+  (add-hook 'eglot-managed-mode-hook #'typst-overlay--add-flymake-backend nil t)
   (add-hook 'flymake-mode-hook #'typst-overlay--update-error-faces nil t)
   (typst-overlay-refresh)
   (when (bound-and-true-p flymake-mode)
@@ -1645,6 +1652,7 @@ Intended for use in `after-save-hook'."
   ;; Clear the diagnostics of the overlays just deleted.
   (typst-overlay--flymake-report)
   (remove-hook 'flymake-diagnostic-functions #'typst-overlay-flymake t)
+  (remove-hook 'eglot-managed-mode-hook #'typst-overlay--add-flymake-backend t)
   (remove-hook 'flymake-mode-hook #'typst-overlay--update-error-faces t)
   (kill-local-variable 'typst-overlay--flymake-report-fn))
 
