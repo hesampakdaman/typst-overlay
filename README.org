@@ -5,7 +5,7 @@
 
 Render Typst math equations as inline overlays in Emacs. Equations are asynchronously compiled to SVG using the =typst= compiler and displayed on top of the source text. Overlays are visible when the cursor is outside the equation and hidden when the cursor moves inside, revealing the raw source for editing. Overlays are invalidated when the underlying text is modified and restored on the next refresh.
 
-Equations that fail to compile are underlined (face =typst-overlay-error=); move point into one, or hover over it, to see the error. With =flymake-mode= on, they are reported as Flymake diagnostics instead, so they show up in =flymake-show-buffer-diagnostics=, can be visited with =flymake-goto-next-error=, and are underlined by Flymake.
+Equations that fail to render get a dotted red underline (face =typst-overlay-error=); move point into one, or hover over it, to see the error. With =flymake-mode= on, the errors are also reported as Flymake diagnostics.
 
 ** Requirements
 - Emacs 29.1 or later, built with SVG support (most builds are)
@@ -38,7 +38,7 @@ Turning on =flymake-mode= alongside =typst-overlay-mode= is recommended, as in t
 
 Errors are those of the last refresh, so they update when overlays are refreshed, for example on save.
 
-In buffers managed by Eglot, for example with =tinymist=, the language server reports compile errors itself, so typst-overlay leaves Flymake to it rather than report each error twice. Equations that fail to render are still underlined.
+In buffers managed by Eglot, for example with =tinymist=, the language server reports compile errors itself, so typst-overlay leaves Flymake to it rather than report each error twice. Equations that fail to render keep their dotted underline either way, which marks that they did not render; the error itself comes from Flymake.
 
 ** Configuration
 All options are available via =M-x customize-group RET typst-overlay=.

@@ -730,7 +730,7 @@ counts of every compile started, in order."
     (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 3))))
 
 (ert-deftest typst-overlay-test-flymake ()
-  "Failed equations are reported to Flymake, which then underlines them."
+  "Failed equations are reported to Flymake, and still marked as failed."
   (skip-unless (treesit-language-available-p 'typst))
   (typst-overlay-test--with-batches
       (replace-regexp-in-string "x_2" "BAD" (typst-overlay-test--equations 3))
@@ -753,14 +753,11 @@ counts of every compile started, in order."
       (should-not (diagnostics))
       (run-compiles)
       (should (equal (diagnostics) '(("$BAD$" "unknown variable: BAD"))))
-      (should-not (error-face))
-      ;; Without Flymake, the mode underlines the equation itself.
-      (flymake-mode -1)
       (should (eq (error-face) 'typst-overlay-error))
+      (flymake-mode -1)
       (flymake-mode 1)
       (flymake-start)
       (should (equal (diagnostics) '(("$BAD$" "unknown variable: BAD"))))
-      (should-not (error-face))
       ;; Turning the mode off clears its diagnostics.
       (typst-overlay-mode -1)
       (should-not (diagnostics))
@@ -787,6 +784,7 @@ counts of every compile started, in order."
       (flymake-mode 1)
       (flymake-start)
       (should-not (backends))
+      ;; Still marked as failed to render.
       (should (eq (error-face) 'typst-overlay-error))
       ;; Later compiles are not reported either.
       (typst-overlay-refresh)
