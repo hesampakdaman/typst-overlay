@@ -44,7 +44,7 @@ In Typst buffers this is opt-in, by setting =typst-overlay-use-flymake= to =t= a
 
 Errors are those of the last refresh, so they update when overlays are refreshed, for example on save.
 
-In buffers managed by Eglot, for example with =tinymist=, the language server reports compile errors itself, so typst-overlay leaves Flymake to it rather than report each error twice, whether Eglot starts before or after =typst-overlay-mode=. Equations that fail to render keep their dotted underline either way; move point into one to see its error.
+In buffers managed by Eglot, for example with =tinymist=, typst-overlay reports alongside the language server, whether Eglot starts before or after =typst-overlay-mode=. Typst stops at the first evaluation error in a document, so the language server reports those one at a time, while typst-overlay compiles each equation on its own and reports them all. An equation both report shows up twice; with Flymake 1.4 or later (Emacs 31) typst-overlay's carry the origin =typst-overlay=.
 
 ** Configuration
 All options are available via =M-x customize-group RET typst-overlay=.

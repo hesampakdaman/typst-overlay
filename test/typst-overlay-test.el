@@ -795,13 +795,18 @@ By default, in org buffers only."
 This holds whether Eglot starts before or after the mode."
   (skip-unless (treesit-language-available-p 'typst))
   (let ((typst-overlay-use-flymake t)
+        (managed nil)
         saved)
+   ;; Eglot says so while it manages the buffer, as 0.5.0 relied on.
+   (cl-letf (((symbol-function 'eglot-managed-p) (lambda () managed)))
     (cl-flet ((eglot-on ()
                 ;; What Eglot does when it starts managing the buffer.
-                (setq saved flymake-diagnostic-functions)
+                (setq managed t
+                      saved flymake-diagnostic-functions)
                 (setq-local flymake-diagnostic-functions '(eglot-flymake-backend))
                 (run-hooks 'eglot-managed-mode-hook))
               (eglot-off ()
+                (setq managed nil)
                 (setq-local flymake-diagnostic-functions saved)
                 (run-hooks 'eglot-managed-mode-hook)))
       ;; Eglot starts after the mode.
@@ -823,7 +828,7 @@ This holds whether Eglot starts before or after the mode."
         (should (memq #'typst-overlay-flymake flymake-diagnostic-functions))
         (typst-overlay-mode -1)
         (should-not (memq #'typst-overlay--add-flymake-backend
-                          eglot-managed-mode-hook))))))
+                          eglot-managed-mode-hook)))))))
 
 (ert-deftest typst-overlay-test-eldoc-org ()
   "ElDoc is turned on in org buffers, which have no ElDoc function."
