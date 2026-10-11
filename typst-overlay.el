@@ -106,10 +106,12 @@ Should return a `typst-overlay-analysis' struct.")
   beg
   end
   text
-  hash)
+  hash
+  scope)  ;; (BEG . END) of the content block it is in, or nil at top level
 
-(defun typst-overlay--make-code-node (node)
-  "Return a `typst-overlay-code-node' for the tree-sitter NODE."
+(defun typst-overlay--make-code-node (node &optional scope)
+  "Return a `typst-overlay-code-node' for the tree-sitter NODE.
+SCOPE is the tree-sitter `content' node NODE is in, if any."
   (let* ((beg (treesit-node-start node))
          (end (treesit-node-end node))
          (text (buffer-substring-no-properties beg end)))
@@ -117,17 +119,22 @@ Should return a `typst-overlay-analysis' struct.")
      :beg beg
      :end end
      :text text
-     :hash (md5 text))))
+     :hash (md5 text)
+     :scope (and scope (cons (treesit-node-start scope)
+                             (treesit-node-end scope))))))
 
 (defun typst-overlay--collect-code-nodes (root)
-  "Collect outermost code nodes under ROOT in document order.
+  "Collect code nodes under ROOT that sit in markup, in document order.
 
-We query all `code` nodes via tree-sitter, but this includes nested
-code blocks.  We only want top-level (outermost) ones, since nested
-code should not be treated as independent top-level code nodes.
+We query all `code` nodes via tree-sitter, but this includes code
+nested in other code, such as `#x' in `#let f(x) = $#x$'.  We only
+want code written directly in markup: at top level, or in a content
+block like the `[...]' of `#enum.item[...]'.
 
-To enforce this, for each matched node we walk up its parent chain.
-If we encounter another `code` node, this node is nested and skipped.
+To enforce this, for each matched node we walk up its parent chain
+to the first `code` or `content` node.  If it is a `code` node, this
+node is nested and skipped.  If it is a `content` node, that block is
+the node's scope: a `#let' there is only visible inside it.
 
 Remaining nodes are converted to `typst-overlay-code-node's and
 returned in document order."
@@ -136,16 +143,14 @@ returned in document order."
          result)
     (dolist (cap captures)
       (let* ((node (cdr cap))
-             (parent (treesit-node-parent node))
-             (inside-code nil))
-        ;; Walk up the parent chain to detect whether this `code` node
-        ;; is nested inside another `code` node. If so, skip it.
-        (while (and parent (not inside-code))
-          (when (string= (treesit-node-type parent) "code")
-            (setq inside-code t))
+             (parent (treesit-node-parent node)))
+        ;; Walk up the parent chain to the enclosing `code` or `content`.
+        (while (and parent
+                    (not (member (treesit-node-type parent)
+                                 '("code" "content"))))
           (setq parent (treesit-node-parent parent)))
-        (unless inside-code
-          (push (typst-overlay--make-code-node node) result))))
+        (unless (and parent (string= (treesit-node-type parent) "code"))
+          (push (typst-overlay--make-code-node node parent) result))))
     (nreverse result)))
 
 (defun typst-overlay--sort-code-nodes (nodes)
@@ -496,7 +501,8 @@ The cache key also covers `typst-overlay-extra-prelude'."
   "Return prelude CODE-NODES that occur before MATH-NODE.
 
 A code node contributes to the prelude if:
-- it appears before the math node in the buffer, and
+- it appears before the math node in the buffer,
+- the math node is within its scope, if it has one, and
 - it satisfies `typst-overlay--prelude-code-node-p'
 
 The result is returned in document order."
@@ -504,6 +510,8 @@ The result is returned in document order."
         result)
     (dolist (code-node code-nodes)
       (when (and (< (typst-overlay-code-node-beg code-node) math-beg)
+                 (let ((scope (typst-overlay-code-node-scope code-node)))
+                   (or (null scope) (< math-beg (cdr scope))))
                  (typst-overlay--prelude-code-node-p code-node))
         (push code-node result)))
     (nreverse result)))

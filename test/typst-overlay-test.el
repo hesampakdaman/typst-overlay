@@ -150,6 +150,38 @@ The case name is part of the compared value so failures show it."
   (typst-overlay-test--run-cases #'typst-overlay-test--setup-typst
                                  typst-overlay-test--typst-cases))
 
+;;; Preludes
+
+(defconst typst-overlay-test--prelude-cases
+  '(("top-level #let" "#let k = 1\n$k$" (("$k$" "#let k = 1")))
+    ("#let in a content block"
+     "#enum(\n  enum.item[\n    #let f(x) = $#x$\n    $f(1)$\n  ],\n)"
+     (("$f(1)$" "#let f(x) = $#x$")))
+    ("#let does not leave its content block"
+     "#box[#let k = 1\n$k$]\n$k$"
+     (("$k$" "#let k = 1") ("$k$" "")))
+    ("top-level and block #let"
+     "#let a = 1\n#box[#let b = 2\n$a + b$]"
+     (("$a + b$" "#let a = 1\n\n#let b = 2"))))
+  "Prelude cases: (NAME INPUT ((EQUATION PRELUDE) ...)).")
+
+(ert-deftest typst-overlay-test-typst-prelude ()
+  "Each equation gets the #let code in scope before it as its prelude."
+  (skip-unless (treesit-language-available-p 'typst))
+  (dolist (case typst-overlay-test--prelude-cases)
+    (pcase-let ((`(,name ,input ,expected) case))
+      (with-temp-buffer
+        (insert input)
+        (typst-overlay-test--setup-typst)
+        (let ((snapshot (typst-overlay--make-snapshot
+                         (funcall typst-overlay--analyzer))))
+          (should (equal (list name expected)
+                         (list name
+                               (mapcar (lambda (element)
+                                         (list (typst-overlay-element-text element)
+                                               (typst-overlay-element-prelude-text element)))
+                                       (typst-overlay-snapshot-elements snapshot))))))))))
+
 ;;; Requirements
 
 (cl-defun typst-overlay-test--enable-error (has-typst has-grammar
