@@ -23,6 +23,8 @@
 (require 'org)
 (require 'typst-overlay)
 
+(defvar eglot-managed-mode-hook)
+
 (defun typst-overlay-test--detect (setup input)
   "Insert INPUT, call SETUP, and return the detected equation texts.
 Also check that each node's region contains exactly its text."
@@ -736,7 +738,8 @@ counts of every compile started, in order."
 (ert-deftest typst-overlay-test-flymake ()
   "Failed equations are reported to Flymake, and still marked as failed."
   (skip-unless (treesit-language-available-p 'typst))
-  (typst-overlay-test--with-batches
+  (let ((typst-overlay-use-flymake t))
+   (typst-overlay-test--with-batches
       (replace-regexp-in-string "x_2" "BAD" (typst-overlay-test--equations 3))
       (typst-overlay-test--error-at "BAD" "unknown variable: BAD")
     (cl-flet ((diagnostics ()
@@ -766,35 +769,51 @@ counts of every compile started, in order."
       (typst-overlay-mode -1)
       (should-not (diagnostics))
       (should-not (memq #'typst-overlay-flymake flymake-diagnostic-functions))
-      (flymake-mode -1))))
+      (flymake-mode -1)))))
+
+(ert-deftest typst-overlay-test-flymake-opt-in ()
+  "The backend is only added if `typst-overlay-use-flymake' is set."
+  (skip-unless (treesit-language-available-p 'typst))
+  (let ((typst-overlay-use-flymake nil))
+    (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
+      (should-not (memq #'typst-overlay-flymake flymake-diagnostic-functions)))))
 
 (ert-deftest typst-overlay-test-flymake-eglot ()
-  "With Eglot, its language server reports errors and the mode steps aside."
+  "With Eglot, its language server reports errors and the mode steps aside.
+This holds whether Eglot starts before or after the mode."
   (skip-unless (treesit-language-available-p 'typst))
-  (typst-overlay-test--with-batches
-      (replace-regexp-in-string "x_2" "BAD" (typst-overlay-test--equations 3))
-      (typst-overlay-test--error-at "BAD" "unknown variable: BAD")
-    (cl-flet ((backends ()
-                (mapcar #'flymake-diagnostic-backend (flymake-diagnostics)))
-              (error-face ()
-                (overlay-get (car (typst-overlay--error-overlays)) 'face)))
-      (flymake-mode 1)
-      (flymake-start)
-      (run-compiles)
-      (should (equal (backends) '(typst-overlay-flymake)))
-      ;; What Eglot does when it starts managing the buffer.
-      (setq-local flymake-diagnostic-functions
-                  (list (lambda (report-fn &rest _) (funcall report-fn nil))))
-      (flymake-mode 1)
-      (flymake-start)
-      (should-not (backends))
-      ;; Still marked as failed to render.
-      (should (eq (error-face) 'typst-overlay-error))
-      ;; Later compiles are not reported either.
-      (typst-overlay-refresh)
-      (run-compiles)
-      (should-not (backends))
-      (flymake-mode -1))))
+  (let ((typst-overlay-use-flymake t)
+        (managed nil)
+        saved)
+    (cl-letf (((symbol-function 'eglot-managed-p) (lambda () managed)))
+      (cl-flet ((eglot-on ()
+                  ;; What Eglot does when it starts managing the buffer.
+                  (setq managed t
+                        saved flymake-diagnostic-functions)
+                  (setq-local flymake-diagnostic-functions '(eglot-flymake-backend))
+                  (run-hooks 'eglot-managed-mode-hook))
+                (eglot-off ()
+                  (setq managed nil)
+                  (setq-local flymake-diagnostic-functions saved)
+                  (run-hooks 'eglot-managed-mode-hook)))
+        ;; Eglot starts after the mode.
+        (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
+          (should (equal flymake-diagnostic-functions '(typst-overlay-flymake t)))
+          (eglot-on)
+          (should (equal flymake-diagnostic-functions '(eglot-flymake-backend)))
+          (eglot-off)
+          (should (equal flymake-diagnostic-functions '(typst-overlay-flymake t))))
+        ;; Eglot starts before the mode.
+        (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
+          (typst-overlay-mode -1)
+          (eglot-on)
+          (typst-overlay-mode 1)
+          (should (equal flymake-diagnostic-functions '(eglot-flymake-backend)))
+          (eglot-off)
+          (should (memq #'typst-overlay-flymake flymake-diagnostic-functions))
+          (typst-overlay-mode -1)
+          (should-not (memq #'typst-overlay--sync-flymake-backend
+                            eglot-managed-mode-hook)))))))
 
 (ert-deftest typst-overlay-test-eldoc-org ()
   "ElDoc is turned on in org buffers, which have no ElDoc function."
