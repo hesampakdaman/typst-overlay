@@ -30,6 +30,9 @@
 ;; To refresh on save, add `typst-overlay-save-refresh' to
 ;; `after-save-hook'.
 ;;
+;; With `flymake-mode' on, equations that fail to compile are reported
+;; as Flymake diagnostics.
+;;
 ;; Requires the `typst' executable on PATH and the Typst tree-sitter
 ;; grammar.  See `customize-group' `typst-overlay' for options.
 
@@ -41,6 +44,12 @@
 
 (declare-function org-element-context "org-element" (&optional element))
 (declare-function org-element-type "org-element-ast" (node &optional anonymous))
+(declare-function flymake-make-diagnostic "flymake"
+                  (locus beg end type text &optional data overlay-properties))
+(declare-function flymake-running-backends "flymake" ())
+(declare-function flymake-start "flymake" (&optional deferred force))
+
+(defvar flymake-mode)
 
 (defvar typst-overlay-mode)
 
@@ -953,8 +962,9 @@ rendered by `typst-overlay--start-renders'."
 (defun typst-overlay--echo-error-at-point ()
   "Show the error of a failed equation when point enters it.
 The message is shown once per entry, not after every command."
-  (let ((overlay (seq-find (lambda (ov) (overlay-get ov 'typst-overlay-error))
-                           (overlays-at (point)))))
+  (let ((overlay (and (not (typst-overlay--flymake-active-p))
+                      (seq-find (lambda (ov) (overlay-get ov 'typst-overlay-error))
+                                (overlays-at (point))))))
     (unless (eq overlay typst-overlay--shown-error-overlay)
       (setq typst-overlay--shown-error-overlay overlay)
       (when overlay
@@ -1333,7 +1343,8 @@ whose SESSION is outdated, are ignored."
          (car jobs) artifact-cache
          (or (typst-overlay--job-error errors (car lines))
              (typst-overlay--compile-error-summary output))))))
-    (typst-overlay--drain-compile-queue)))
+    (typst-overlay--drain-compile-queue)
+    (typst-overlay--flymake-report)))
 
 (defun typst-overlay--release-job (job)
   "Release JOB's markers."
@@ -1430,12 +1441,67 @@ when point enters the equation."
   (let ((overlay (make-overlay (typst-overlay-element-beg element)
                                (typst-overlay-element-end element)
                                nil t nil)))
-    (overlay-put overlay 'face 'typst-overlay-error)
+    (overlay-put overlay 'face (typst-overlay--error-face))
     (overlay-put overlay 'typst-overlay-error message)
     (overlay-put overlay 'help-echo message)
     (overlay-put overlay 'evaporate t)
     (overlay-put overlay 'modification-hooks '(typst-overlay--invalidate-overlay))
     overlay))
+
+;; flymake
+(defvar-local typst-overlay--flymake-report-fn nil
+  "Report function from the latest Flymake check, or nil.")
+
+(defun typst-overlay--flymake-active-p ()
+  "Return non-nil if Flymake shows this buffer's equation errors."
+  (and (bound-and-true-p flymake-mode)
+       (memq #'typst-overlay-flymake (flymake-running-backends))))
+
+(defun typst-overlay--error-face ()
+  "Return the face for failed equations.
+It is nil while Flymake underlines them instead."
+  (unless (typst-overlay--flymake-active-p)
+    'typst-overlay-error))
+
+(defun typst-overlay--error-overlays ()
+  "Return the overlays of failed equations, in buffer order."
+  (sort (seq-filter (lambda (ov) (overlay-get ov 'typst-overlay-error))
+                    (overlays-in (point-min) (point-max)))
+        (lambda (a b) (< (overlay-start a) (overlay-start b)))))
+
+(defun typst-overlay--update-error-faces ()
+  "Underline failed equations, unless Flymake does."
+  (let ((face (typst-overlay--error-face)))
+    (dolist (overlay (typst-overlay--error-overlays))
+      (overlay-put overlay 'face face))))
+
+(defun typst-overlay--flymake-report ()
+  "Report the failed equations to Flymake, if it has asked for them.
+Compiles finish after Flymake's check, so this is called again as
+their results come in.  Each report replaces the previous one."
+  (when (and typst-overlay--flymake-report-fn
+             (bound-and-true-p flymake-mode))
+    (save-restriction
+      (widen)
+      (funcall typst-overlay--flymake-report-fn
+               (mapcar (lambda (overlay)
+                         (flymake-make-diagnostic
+                          (current-buffer)
+                          (overlay-start overlay) (overlay-end overlay)
+                          :error (overlay-get overlay 'typst-overlay-error)))
+                       (typst-overlay--error-overlays))
+               ;; Without a region, Flymake keeps the diagnostics of
+               ;; earlier reports in the same check.
+               :region (cons (point-min) (point-max))))))
+
+(defun typst-overlay-flymake (report-fn &rest _args)
+  "Flymake backend for equations that failed to compile.
+`typst-overlay-mode' adds it to `flymake-diagnostic-functions'.  It
+reports the errors of the last `typst-overlay-refresh' to REPORT-FN,
+and keeps reporting as compiles finish."
+  (setq typst-overlay--flymake-report-fn report-fn)
+  (typst-overlay--update-error-faces)
+  (typst-overlay--flymake-report))
 
 (defun typst-overlay--artifact-svg-path (cache-key)
   "Return the cached SVG path for CACHE-KEY in the current file's directory."
@@ -1493,6 +1559,7 @@ when point enters the equation."
        typst-overlay--registry
        typst-overlay--artifact-cache)
       (setq typst-overlay--snapshot new-snapshot)))
+  (typst-overlay--flymake-report)
   t)
 
 ;; mode
@@ -1544,7 +1611,11 @@ Intended for use in `after-save-hook'."
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
   (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
-  (typst-overlay-refresh))
+  (add-hook 'flymake-diagnostic-functions #'typst-overlay-flymake nil t)
+  (add-hook 'flymake-mode-hook #'typst-overlay--update-error-faces nil t)
+  (typst-overlay-refresh)
+  (when (bound-and-true-p flymake-mode)
+    (flymake-start)))
 
 (defun typst-overlay--disable ()
   "Tear down `typst-overlay-mode' in the current buffer."
@@ -1552,7 +1623,12 @@ Intended for use in `after-save-hook'."
   (remove-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (remove-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
   (kill-local-variable 'typst-overlay--last-point)
-  (typst-overlay--teardown))
+  (typst-overlay--teardown)
+  ;; Clear the diagnostics of the overlays just deleted.
+  (typst-overlay--flymake-report)
+  (remove-hook 'flymake-diagnostic-functions #'typst-overlay-flymake t)
+  (remove-hook 'flymake-mode-hook #'typst-overlay--update-error-faces t)
+  (kill-local-variable 'typst-overlay--flymake-report-fn))
 
 ;;;###autoload
 (define-minor-mode typst-overlay-mode

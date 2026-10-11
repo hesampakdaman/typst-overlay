@@ -5,7 +5,7 @@
 
 Render Typst math equations as inline overlays in Emacs. Equations are asynchronously compiled to SVG using the =typst= compiler and displayed on top of the source text. Overlays are visible when the cursor is outside the equation and hidden when the cursor moves inside, revealing the raw source for editing. Overlays are invalidated when the underlying text is modified and restored on the next refresh.
 
-Equations that fail to compile are underlined (face =typst-overlay-error=); move point into one, or hover over it, to see the error.
+Equations that fail to compile are underlined (face =typst-overlay-error=); move point into one, or hover over it, to see the error. With =flymake-mode= on, they are reported as Flymake diagnostics instead, so they show up in =flymake-show-buffer-diagnostics=, can be visited with =flymake-goto-next-error=, and are underlined by Flymake.
 
 ** Requirements
 - Emacs 29.1 or later, built with SVG support (most builds are)
@@ -30,6 +30,13 @@ Equations that fail to compile are underlined (face =typst-overlay-error=); move
 
 ** Usage
 Enable the minor mode with =M-x typst-overlay-mode=. To render overlays manually run =M-x typst-overlay-refresh=.
+
+** Flymake
+=typst-overlay-mode= adds the backend =typst-overlay-flymake= to =flymake-diagnostic-functions=, so just enable =flymake-mode= in the same buffer:
+#+begin_src emacs-lisp
+  (add-hook 'typst-ts-mode-hook #'flymake-mode)
+#+end_src
+Errors are those of the last refresh, so they update when overlays are refreshed, for example on save.
 
 ** Configuration
 All options are available via =M-x customize-group RET typst-overlay=.

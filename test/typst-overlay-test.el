@@ -18,6 +18,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'flymake)
 (require 'image)  ; before `create-image' is stubbed, so loading it later cannot undo that
 (require 'org)
 (require 'typst-overlay)
@@ -689,6 +690,42 @@ counts of every compile started, in order."
     (should (= typst-overlay--active-compiles 0))
     ;; Only the second enable's compiles placed overlays, once each.
     (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 3))))
+
+(ert-deftest typst-overlay-test-flymake ()
+  "Failed equations are reported to Flymake, which then underlines them."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches
+      (replace-regexp-in-string "x_2" "BAD" (typst-overlay-test--equations 3))
+      (typst-overlay-test--error-at "BAD" "unknown variable: BAD")
+    (cl-flet ((diagnostics ()
+                (mapcar (lambda (diag)
+                          (list (buffer-substring-no-properties
+                                 (flymake-diagnostic-beg diag)
+                                 (flymake-diagnostic-end diag))
+                                (flymake-diagnostic-text diag)))
+                        (flymake-diagnostics)))
+              (error-face ()
+                (overlay-get (car (typst-overlay--error-overlays)) 'face)))
+      (should (memq #'typst-overlay-flymake flymake-diagnostic-functions))
+      (flymake-mode 1)
+      (flymake-start)
+      ;; Errors from compiles finishing after the check are reported.
+      (should-not (diagnostics))
+      (run-compiles)
+      (should (equal (diagnostics) '(("$BAD$" "unknown variable: BAD"))))
+      (should-not (error-face))
+      ;; Without Flymake, the mode underlines the equation itself.
+      (flymake-mode -1)
+      (should (eq (error-face) 'typst-overlay-error))
+      (flymake-mode 1)
+      (flymake-start)
+      (should (equal (diagnostics) '(("$BAD$" "unknown variable: BAD"))))
+      (should-not (error-face))
+      ;; Turning the mode off clears its diagnostics.
+      (typst-overlay-mode -1)
+      (should-not (diagnostics))
+      (should-not (memq #'typst-overlay-flymake flymake-diagnostic-functions))
+      (flymake-mode -1))))
 
 ;;; Image size
 
