@@ -499,23 +499,27 @@ texts with an artifact in the cache, and NEW the current elements.")
                    (typst-overlay--get-record typst-overlay--registry element))
                   'rendering)))))
 
-(ert-deftest typst-overlay-test-error-shown-once ()
-  "The error is shown when point enters the equation, not on every command."
+(ert-deftest typst-overlay-test-eldoc ()
+  "ElDoc shows the error of the failed equation at point."
   (with-temp-buffer
     (insert "Bad $ac$ end.")
     (typst-overlay--place-error-overlay
      (typst-overlay-test--element 5 "$ac$") "unknown variable: ac")
-    (let (shown)
-      (cl-letf (((symbol-function 'message)
-                 (lambda (fmt &rest args) (push (apply #'format fmt args) shown))))
-        (dolist (pos '(1 6 7 6 1 7))    ; outside, inside x3, outside, inside
-          (goto-char pos)
-          (typst-overlay--echo-error-at-point)))
-      (should (equal (reverse shown)
-                     '("Typst: unknown variable: ac"
-                       "Typst: unknown variable: ac"))))))
-
-;;; Batch compile
+    (cl-flet ((doc ()
+                (let (result)
+                  (typst-overlay--eldoc
+                   (lambda (&rest args) (setq result args)))
+                  result)))
+      (goto-char 6)
+      (should (equal (doc) '("unknown variable: ac" :thing "Typst" :face error)))
+      (goto-char 1)
+      (should-not (doc))
+      ;; Not where Flymake already shows a diagnostic.
+      (goto-char 6)
+      (setq-local flymake-mode t)
+      (cl-letf (((symbol-function 'flymake-diagnostics)
+                 (lambda (&rest _) '(diagnostic))))
+        (should-not (doc))))))
 
 (ert-deftest typst-overlay-test-batch-source ()
   "Each job's recorded lines match its block in the batch source."
@@ -792,21 +796,14 @@ counts of every compile started, in order."
       (should-not (backends))
       (flymake-mode -1))))
 
-(ert-deftest typst-overlay-test-error-not-shown-over-flymake ()
-  "The error is not shown where Flymake already shows a diagnostic."
-  (with-temp-buffer
-    (insert "Bad $ac$ end.")
-    (typst-overlay--place-error-overlay
-     (typst-overlay-test--element 5 "$ac$") "unknown variable: ac")
-    (let (shown)
-      (cl-letf (((symbol-function 'message)
-                 (lambda (fmt &rest args) (push (apply #'format fmt args) shown)))
-                ((symbol-function 'flymake-diagnostics)
-                 (lambda (&rest _) '(diagnostic))))
-        (setq-local flymake-mode t)
-        (goto-char 6)
-        (typst-overlay--echo-error-at-point))
-      (should-not shown))))
+(ert-deftest typst-overlay-test-eldoc-org ()
+  "ElDoc is turned on in org buffers, which have no ElDoc function."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches "Text $x$." #'ignore
+    (should eldoc-mode)
+    (should (memq #'typst-overlay--eldoc eldoc-documentation-functions))
+    (typst-overlay-mode -1)
+    (should-not (memq #'typst-overlay--eldoc eldoc-documentation-functions))))
 
 ;;; Image size
 

@@ -100,8 +100,6 @@ point enters them."
 
 (defvar-local typst-overlay--snapshot nil)
 (defvar-local typst-overlay--active-overlay nil)
-(defvar-local typst-overlay--shown-error-overlay nil
-  "Error overlay whose message was last shown, to show it only once.")
 (defvar-local typst-overlay--registry nil)
 (defvar-local typst-overlay--artifact-cache nil)
 (defvar-local typst-overlay--compile-queue nil)
@@ -974,23 +972,20 @@ rendered by `typst-overlay--start-renders'."
       (when image
         (overlay-put overlay 'display image)))))
 
-(defun typst-overlay--echo-error-at-point ()
-  "Show the error of a failed equation when point enters it.
-The message is shown once per entry, not after every command, and not
-where Flymake already shows a diagnostic."
-  (let ((overlay (and (not (and (bound-and-true-p flymake-mode)
-                                (flymake-diagnostics (point))))
-                      (seq-find (lambda (ov) (overlay-get ov 'typst-overlay-error))
-                                (overlays-at (point))))))
-    (unless (eq overlay typst-overlay--shown-error-overlay)
-      (setq typst-overlay--shown-error-overlay overlay)
-      (when overlay
-        (message "Typst: %s" (overlay-get overlay 'typst-overlay-error))))))
+(defun typst-overlay--eldoc (callback &rest _)
+  "Document the error of the failed equation at point with CALLBACK.
+For `eldoc-documentation-functions'.  Nothing is documented where
+Flymake already shows a diagnostic, which Flymake documents itself."
+  (unless (and (bound-and-true-p flymake-mode)
+               (flymake-diagnostics (point)))
+    (when-let* ((overlay (seq-find (lambda (ov) (overlay-get ov 'typst-overlay-error))
+                                   (overlays-at (point)))))
+      (funcall callback (overlay-get overlay 'typst-overlay-error)
+               :thing "Typst" :face 'error))))
 
 (defun typst-overlay--post-command-update ()
   "Hide overlay under point and restore the previously active one."
   (typst-overlay--handle-upward-entry)
-  (typst-overlay--echo-error-at-point)
   (let ((current (typst-overlay--overlay-at-point))
         (active typst-overlay--active-overlay))
     (unless (eq current active)
@@ -1086,8 +1081,7 @@ falls back to a fixed `typst-overlay-scale'."
   (cl-incf typst-overlay--session)
   (when (overlayp typst-overlay--active-overlay)
     (typst-overlay--show-overlay typst-overlay--active-overlay))
-  (setq typst-overlay--active-overlay nil
-        typst-overlay--shown-error-overlay nil)
+  (setq typst-overlay--active-overlay nil)
   (when typst-overlay--registry
     (maphash
      (lambda (_key record)
@@ -1621,6 +1615,10 @@ Intended for use in `after-save-hook'."
   (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
   (add-hook 'flymake-diagnostic-functions #'typst-overlay-flymake nil t)
+  (add-hook 'eldoc-documentation-functions #'typst-overlay--eldoc nil t)
+  ;; Org buffers, for one, have no ElDoc function until now.
+  (when global-eldoc-mode
+    (turn-on-eldoc-mode))
   (typst-overlay-refresh)
   (when (bound-and-true-p flymake-mode)
     (flymake-start)))
@@ -1635,6 +1633,7 @@ Intended for use in `after-save-hook'."
   ;; Clear the diagnostics of the overlays just deleted.
   (typst-overlay--flymake-report)
   (remove-hook 'flymake-diagnostic-functions #'typst-overlay-flymake t)
+  (remove-hook 'eldoc-documentation-functions #'typst-overlay--eldoc t)
   (kill-local-variable 'typst-overlay--flymake-report-fn))
 
 ;;;###autoload
