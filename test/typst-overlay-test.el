@@ -772,11 +772,21 @@ counts of every compile started, in order."
       (flymake-mode -1)))))
 
 (ert-deftest typst-overlay-test-flymake-opt-in ()
-  "The backend is only added if `typst-overlay-use-flymake' is set."
+  "The backend is added where `typst-overlay-use-flymake' applies.
+By default, in org buffers only."
   (skip-unless (treesit-language-available-p 'typst))
-  (let ((typst-overlay-use-flymake nil))
-    (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
-      (should-not (memq #'typst-overlay-flymake flymake-diagnostic-functions)))))
+  (cl-flet ((added-p (setting mode)
+              (let ((typst-overlay-use-flymake setting))
+                (with-temp-buffer
+                  (funcall mode)
+                  (typst-overlay--sync-flymake-backend)
+                  (and (memq #'typst-overlay-flymake flymake-diagnostic-functions)
+                       t)))))
+    (should (eq (default-value 'typst-overlay-use-flymake) 'org))
+    (should (added-p 'org #'org-mode))
+    (should-not (added-p 'org #'fundamental-mode))
+    (should (added-p t #'fundamental-mode))
+    (should-not (added-p nil #'org-mode))))
 
 (ert-deftest typst-overlay-test-flymake-eglot ()
   "With Eglot, its language server reports errors and the mode steps aside.

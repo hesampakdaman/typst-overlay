@@ -30,8 +30,8 @@
 ;; To refresh on save, add `typst-overlay-save-refresh' to
 ;; `after-save-hook'.
 ;;
-;; With `typst-overlay-use-flymake' set, equations that fail to compile
-;; are reported to Flymake.
+;; Equations that fail to compile are reported to Flymake, in org
+;; buffers by default; see `typst-overlay-use-flymake'.
 ;;
 ;; Requires the `typst' executable on PATH and the Typst tree-sitter
 ;; grammar.  See `customize-group' `typst-overlay' for options.
@@ -86,14 +86,19 @@ compiling its share in one batch."
   :type 'string
   :group 'typst-overlay)
 
-(defcustom typst-overlay-use-flymake nil
-  "Non-nil means report equations that fail to compile to Flymake.
-`typst-overlay-mode' then adds `typst-overlay-flymake' to
+(defcustom typst-overlay-use-flymake 'org
+  "Where to report equations that fail to compile to Flymake.
+If `org', in org buffers only, where no language server checks the
+math.  If t, also in Typst buffers.  If nil, nowhere.
+
+Where it applies, `typst-overlay-mode' adds `typst-overlay-flymake' to
 `flymake-diagnostic-functions', so the errors show up once
 `flymake-mode' is on.  Not while Eglot manages the buffer: its
 language server reports compile errors itself.  Takes effect when
 `typst-overlay-mode' is turned on."
-  :type 'boolean
+  :type '(choice (const :tag "In org buffers" org)
+                 (const :tag "Everywhere" t)
+                 (const :tag "Nowhere" nil))
   :group 'typst-overlay)
 
 (defface typst-overlay-error
@@ -1506,8 +1511,8 @@ its language server reports compile errors itself."
 
 (defun typst-overlay-flymake (report-fn &rest _args)
   "Flymake backend for equations that failed to compile.
-`typst-overlay-mode' adds it to `flymake-diagnostic-functions' if
-`typst-overlay-use-flymake' is non-nil.  It
+`typst-overlay-mode' adds it to `flymake-diagnostic-functions' where
+`typst-overlay-use-flymake' applies.  It
 reports the errors of the last `typst-overlay-refresh' to REPORT-FN,
 and keeps reporting as compiles finish."
   (setq typst-overlay--flymake-report-fn report-fn)
@@ -1515,10 +1520,12 @@ and keeps reporting as compiles finish."
 
 (defun typst-overlay--sync-flymake-backend ()
   "Make `typst-overlay-flymake' a Flymake backend, or stop it being one.
-It is one if `typst-overlay-use-flymake' is non-nil and Eglot does not
+It is one where `typst-overlay-use-flymake' applies and Eglot does not
 manage the buffer.  Also runs from `eglot-managed-mode-hook', so this
 holds whether Eglot starts before or after `typst-overlay-mode'."
-  (if (and typst-overlay-use-flymake
+  (if (and (if (eq typst-overlay-use-flymake 'org)
+               (derived-mode-p 'org-mode)
+             typst-overlay-use-flymake)
            (not (and (fboundp 'eglot-managed-p) (eglot-managed-p))))
       (unless (memq #'typst-overlay-flymake flymake-diagnostic-functions)
         (add-hook 'flymake-diagnostic-functions #'typst-overlay-flymake nil t)

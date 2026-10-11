@@ -22,7 +22,8 @@ The recommended configuration:
   (use-package typst-overlay
     :vc (:url "https://github.com/hesampakdaman/typst-overlay" :rev :newest)
     :custom
-    ;; Report equations that fail to compile to Flymake (see below)
+    ;; Report equations that fail to compile to Flymake in Typst
+    ;; buffers too, not only in org buffers (see below)
     (typst-overlay-use-flymake t)
     ;; Optional: shown values are the defaults
     (typst-overlay-scale 1.0)
@@ -37,7 +38,9 @@ To render math in org buffers too, add =(org-mode . typst-overlay-mode)= and =(o
 Enable the minor mode with =M-x typst-overlay-mode=. To render overlays manually run =M-x typst-overlay-refresh=.
 
 ** Flymake
-With =typst-overlay-use-flymake= set, as in the recommended configuration, =typst-overlay-mode= adds the backend =typst-overlay-flymake= to =flymake-diagnostic-functions=. With =flymake-mode= on, equations that fail to compile are then listed by =flymake-show-buffer-diagnostics= and visited with =flymake-goto-next-error=. This is most useful in org buffers, where no language server checks the math.
+In org buffers, turn on =flymake-mode= alongside =typst-overlay-mode= and equations that fail to compile are reported to Flymake: listed by =flymake-show-buffer-diagnostics= and visited with =flymake-goto-next-error=. No language server checks math in org buffers, so typst-overlay is the only source of these errors there.
+
+In Typst buffers this is opt-in, by setting =typst-overlay-use-flymake= to =t= as in the recommended configuration, since a language server may check them already. Set it to =nil= to never report to Flymake.
 
 Errors are those of the last refresh, so they update when overlays are refreshed, for example on save.
 
@@ -52,7 +55,7 @@ All options are available via =M-x customize-group RET typst-overlay=.
 | =typst-overlay-cache-dir-name=      | =.typst-overlay-cache= | Directory name for cached SVG files  |
 | =typst-overlay-max-active-compiles= | =8=                    | Max concurrent compilation processes |
 | =typst-overlay-extra-prelude=       | =""=                   | Extra typst prelude code             |
-| =typst-overlay-use-flymake=         | =nil=                  | Report failed equations to Flymake   |
+| =typst-overlay-use-flymake=         | =org=                  | Where to report errors to Flymake    |
 |-------------------------------------+------------------------+--------------------------------------|
 
 ** Running tests
