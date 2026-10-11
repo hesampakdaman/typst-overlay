@@ -47,7 +47,6 @@
 (declare-function flymake-make-diagnostic "flymake"
                   (locus beg end type text &optional data overlay-properties))
 (declare-function flymake-diagnostics "flymake" (&optional beg end))
-(declare-function eglot-managed-p "eglot" ())
 (declare-function flymake-start "flymake" (&optional deferred force))
 
 (defvar flymake-mode)
@@ -93,9 +92,10 @@ math.  If t, also in Typst buffers.  If nil, nowhere.
 
 Where it applies, `typst-overlay-mode' adds `typst-overlay-flymake' to
 `flymake-diagnostic-functions', so the errors show up once
-`flymake-mode' is on.  Not while Eglot manages the buffer: its
-language server reports compile errors itself.  Takes effect when
-`typst-overlay-mode' is turned on."
+`flymake-mode' is on.  With Eglot, they are reported alongside its
+language server's, which stops at the first error in the document;
+an equation it also reports is then reported twice.  Takes effect
+when `typst-overlay-mode' is turned on."
   :type '(choice (const :tag "In org buffers" org)
                  (const :tag "Everywhere" t)
                  (const :tag "Nowhere" nil))
@@ -1490,9 +1490,8 @@ when point enters the equation."
 Compiles finish after Flymake's check, so this is called again as
 their results come in.  Each report replaces the previous one.
 
-Nothing is reported once the backend is no longer one of the buffer's
-`flymake-diagnostic-functions'.  Eglot replaces them with its own, as
-its language server reports compile errors itself."
+Nothing is reported while the backend is not one of the buffer's
+`flymake-diagnostic-functions', as Flymake would still take it."
   (when (and typst-overlay--flymake-report-fn
              (bound-and-true-p flymake-mode)
              (memq #'typst-overlay-flymake flymake-diagnostic-functions))
@@ -1503,7 +1502,12 @@ its language server reports compile errors itself."
                          (flymake-make-diagnostic
                           (current-buffer)
                           (overlay-start overlay) (overlay-end overlay)
-                          :error (overlay-get overlay 'typst-overlay-error)))
+                          :error
+                          (let ((message (overlay-get overlay 'typst-overlay-error)))
+                            ;; Flymake 1.4 and later take an origin.
+                            (if (fboundp 'flymake-diagnostic-origin)
+                                (list "typst-overlay" nil message)
+                              message))))
                        (typst-overlay--error-overlays))
                ;; Without a region, Flymake keeps the diagnostics of
                ;; earlier reports in the same check.
@@ -1518,20 +1522,18 @@ and keeps reporting as compiles finish."
   (setq typst-overlay--flymake-report-fn report-fn)
   (typst-overlay--flymake-report))
 
-(defun typst-overlay--sync-flymake-backend ()
-  "Make `typst-overlay-flymake' a Flymake backend, or stop it being one.
-It is one where `typst-overlay-use-flymake' applies and Eglot does not
-manage the buffer.  Also runs from `eglot-managed-mode-hook', so this
-holds whether Eglot starts before or after `typst-overlay-mode'."
-  (if (and (if (eq typst-overlay-use-flymake 'org)
-               (derived-mode-p 'org-mode)
-             typst-overlay-use-flymake)
-           (not (and (fboundp 'eglot-managed-p) (eglot-managed-p))))
-      (unless (memq #'typst-overlay-flymake flymake-diagnostic-functions)
-        (add-hook 'flymake-diagnostic-functions #'typst-overlay-flymake nil t)
-        (when (bound-and-true-p flymake-mode)
-          (flymake-start)))
-    (remove-hook 'flymake-diagnostic-functions #'typst-overlay-flymake t)))
+(defun typst-overlay--add-flymake-backend ()
+  "Add `typst-overlay-flymake' to the buffer's Flymake backends.
+Only where `typst-overlay-use-flymake' applies.  Eglot replaces the
+backends with its own when it starts, and restores those it saved when
+it stops, so this also runs from `eglot-managed-mode-hook'."
+  (when (and (if (eq typst-overlay-use-flymake 'org)
+                 (derived-mode-p 'org-mode)
+               typst-overlay-use-flymake)
+             (not (memq #'typst-overlay-flymake flymake-diagnostic-functions)))
+    (add-hook 'flymake-diagnostic-functions #'typst-overlay-flymake nil t)
+    (when (bound-and-true-p flymake-mode)
+      (flymake-start))))
 
 ;; The backend runs no code from the buffer, it only reports errors
 ;; found by `typst-overlay-mode', so Flymake may run it in untrusted
@@ -1646,13 +1648,13 @@ Intended for use in `after-save-hook'."
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
   (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
-  (add-hook 'eglot-managed-mode-hook #'typst-overlay--sync-flymake-backend nil t)
+  (add-hook 'eglot-managed-mode-hook #'typst-overlay--add-flymake-backend nil t)
   (add-hook 'eldoc-documentation-functions #'typst-overlay--eldoc nil t)
   ;; Org buffers, for one, have no ElDoc function until now.
   (when global-eldoc-mode
     (turn-on-eldoc-mode))
   (typst-overlay-refresh)
-  (typst-overlay--sync-flymake-backend))
+  (typst-overlay--add-flymake-backend))
 
 (defun typst-overlay--disable ()
   "Tear down `typst-overlay-mode' in the current buffer."
@@ -1664,7 +1666,7 @@ Intended for use in `after-save-hook'."
   ;; Clear the diagnostics of the overlays just deleted.
   (typst-overlay--flymake-report)
   (remove-hook 'flymake-diagnostic-functions #'typst-overlay-flymake t)
-  (remove-hook 'eglot-managed-mode-hook #'typst-overlay--sync-flymake-backend t)
+  (remove-hook 'eglot-managed-mode-hook #'typst-overlay--add-flymake-backend t)
   (remove-hook 'eldoc-documentation-functions #'typst-overlay--eldoc t)
   (kill-local-variable 'typst-overlay--flymake-report-fn))
 
