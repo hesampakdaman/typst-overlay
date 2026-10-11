@@ -160,6 +160,12 @@ The case name is part of the compared value so failures show it."
     ("#let does not leave its content block"
      "#box[#let k = 1\n$k$]\n$k$"
      (("$k$" "#let k = 1") ("$k$" "")))
+    ("#let under a heading reaches later sections"
+     "=== A\n#let k = 1\n$k$\n=== B\n$k$"
+     (("$k$" "#let k = 1") ("$k$" "#let k = 1")))
+    ("#let in a block under a heading"
+     "=== A\n#box[#let k = 1\n$k$]\n=== B\n$k$"
+     (("$k$" "#let k = 1") ("$k$" "")))
     ("top-level and block #let"
      "#let a = 1\n#box[#let b = 2\n$a + b$]"
      (("$a + b$" "#let a = 1\n\n#let b = 2"))))

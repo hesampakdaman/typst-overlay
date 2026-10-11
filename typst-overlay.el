@@ -132,9 +132,12 @@ want code written directly in markup: at top level, or in a content
 block like the `[...]' of `#enum.item[...]'.
 
 To enforce this, for each matched node we walk up its parent chain
-to the first `code` or `content` node.  If it is a `code` node, this
-node is nested and skipped.  If it is a `content` node, that block is
-the node's scope: a `#let' there is only visible inside it.
+to the first `code` node or content block.  If it is a `code` node,
+this node is nested and skipped.  If it is a content block, that block
+is the node's scope: a `#let' there is only visible inside it.
+
+The body of a section is a `content` node too, but a heading opens no
+scope in Typst, so only `content` written as `[...]' counts.
 
 Remaining nodes are converted to `typst-overlay-code-node's and
 returned in document order."
@@ -144,10 +147,12 @@ returned in document order."
     (dolist (cap captures)
       (let* ((node (cdr cap))
              (parent (treesit-node-parent node)))
-        ;; Walk up the parent chain to the enclosing `code` or `content`.
+        ;; Walk up the parent chain to the enclosing `code` or `[...]'.
         (while (and parent
-                    (not (member (treesit-node-type parent)
-                                 '("code" "content"))))
+                    (not (pcase (treesit-node-type parent)
+                           ("code" t)
+                           ("content" (eq (char-after (treesit-node-start parent))
+                                          ?\[)))))
           (setq parent (treesit-node-parent parent)))
         (unless (and parent (string= (treesit-node-type parent) "code"))
           (push (typst-overlay--make-code-node node parent) result))))
