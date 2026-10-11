@@ -707,6 +707,8 @@ counts of every compile started, in order."
               (error-face ()
                 (overlay-get (car (typst-overlay--error-overlays)) 'face)))
       (should (memq #'typst-overlay-flymake flymake-diagnostic-functions))
+      ;; Newer Flymake only runs backends marked safe in untrusted buffers.
+      (should (function-get 'typst-overlay-flymake 'flymake-always-safe))
       (flymake-mode 1)
       (flymake-start)
       ;; Errors from compiles finishing after the check are reported.

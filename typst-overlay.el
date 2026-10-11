@@ -1503,6 +1503,11 @@ and keeps reporting as compiles finish."
   (typst-overlay--update-error-faces)
   (typst-overlay--flymake-report))
 
+;; The backend runs no code from the buffer, it only reports errors
+;; found by `typst-overlay-mode', so Flymake may run it in untrusted
+;; buffers too.  See `trusted-content'.
+(put 'typst-overlay-flymake 'flymake-always-safe t)
+
 (defun typst-overlay--artifact-svg-path (cache-key)
   "Return the cached SVG path for CACHE-KEY in the current file's directory."
   (let* ((file (buffer-file-name))
