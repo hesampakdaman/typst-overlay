@@ -47,6 +47,7 @@
 (declare-function flymake-make-diagnostic "flymake"
                   (locus beg end type text &optional data overlay-properties))
 (declare-function flymake-running-backends "flymake" ())
+(declare-function flymake-diagnostics "flymake" (&optional beg end))
 (declare-function flymake-start "flymake" (&optional deferred force))
 
 (defvar flymake-mode)
@@ -974,8 +975,10 @@ rendered by `typst-overlay--start-renders'."
 
 (defun typst-overlay--echo-error-at-point ()
   "Show the error of a failed equation when point enters it.
-The message is shown once per entry, not after every command."
-  (let ((overlay (and (not (typst-overlay--flymake-active-p))
+The message is shown once per entry, not after every command, and not
+where Flymake already shows a diagnostic."
+  (let ((overlay (and (not (and (bound-and-true-p flymake-mode)
+                                (flymake-diagnostics (point))))
                       (seq-find (lambda (ov) (overlay-get ov 'typst-overlay-error))
                                 (overlays-at (point))))))
     (unless (eq overlay typst-overlay--shown-error-overlay)
@@ -1466,8 +1469,12 @@ when point enters the equation."
   "Report function from the latest Flymake check, or nil.")
 
 (defun typst-overlay--flymake-active-p ()
-  "Return non-nil if Flymake shows this buffer's equation errors."
+  "Return non-nil if Flymake shows this buffer's equation errors.
+Eglot replaces the buffer's backends with its own, as its language
+server reports compile errors itself.  Flymake may still list this
+backend as running then, so check that it is a backend at all."
   (and (bound-and-true-p flymake-mode)
+       (memq #'typst-overlay-flymake flymake-diagnostic-functions)
        (memq #'typst-overlay-flymake (flymake-running-backends))))
 
 (defun typst-overlay--error-face ()
@@ -1493,7 +1500,7 @@ It is nil while Flymake underlines them instead."
 Compiles finish after Flymake's check, so this is called again as
 their results come in.  Each report replaces the previous one."
   (when (and typst-overlay--flymake-report-fn
-             (bound-and-true-p flymake-mode))
+             (typst-overlay--flymake-active-p))
     (save-restriction
       (widen)
       (funcall typst-overlay--flymake-report-fn
@@ -1520,12 +1527,6 @@ and keeps reporting as compiles finish."
 ;; found by `typst-overlay-mode', so Flymake may run it in untrusted
 ;; buffers too.  See `trusted-content'.
 (put 'typst-overlay-flymake 'flymake-always-safe t)
-
-(defun typst-overlay--add-flymake-backend ()
-  "Add `typst-overlay-flymake' to the buffer's Flymake backends.
-Eglot replaces them with its own when it starts managing the buffer,
-so this runs again from `eglot-managed-mode-hook'."
-  (add-hook 'flymake-diagnostic-functions #'typst-overlay-flymake nil t))
 
 (defun typst-overlay--artifact-svg-path (cache-key)
   "Return the cached SVG path for CACHE-KEY in the current file's directory."
@@ -1635,8 +1636,7 @@ Intended for use in `after-save-hook'."
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
   (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
   (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
-  (typst-overlay--add-flymake-backend)
-  (add-hook 'eglot-managed-mode-hook #'typst-overlay--add-flymake-backend nil t)
+  (add-hook 'flymake-diagnostic-functions #'typst-overlay-flymake nil t)
   (add-hook 'flymake-mode-hook #'typst-overlay--update-error-faces nil t)
   (typst-overlay-refresh)
   (when (bound-and-true-p flymake-mode)
@@ -1652,7 +1652,6 @@ Intended for use in `after-save-hook'."
   ;; Clear the diagnostics of the overlays just deleted.
   (typst-overlay--flymake-report)
   (remove-hook 'flymake-diagnostic-functions #'typst-overlay-flymake t)
-  (remove-hook 'eglot-managed-mode-hook #'typst-overlay--add-flymake-backend t)
   (remove-hook 'flymake-mode-hook #'typst-overlay--update-error-faces t)
   (kill-local-variable 'typst-overlay--flymake-report-fn))
 

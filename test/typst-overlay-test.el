@@ -23,8 +23,6 @@
 (require 'org)
 (require 'typst-overlay)
 
-(defvar eglot-managed-mode-hook)
-
 (defun typst-overlay-test--detect (setup input)
   "Insert INPUT, call SETUP, and return the detected equation texts.
 Also check that each node's region contains exactly its text."
@@ -770,17 +768,47 @@ counts of every compile started, in order."
       (flymake-mode -1))))
 
 (ert-deftest typst-overlay-test-flymake-eglot ()
-  "The backend is added back when Eglot replaces the buffer's backends."
+  "With Eglot, its language server reports errors and the mode steps aside."
   (skip-unless (treesit-language-available-p 'typst))
-  (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
-    ;; What Eglot does when it starts managing the buffer.
-    (setq-local flymake-diagnostic-functions '(eglot-flymake-backend))
-    (run-hooks 'eglot-managed-mode-hook)
-    (should (equal flymake-diagnostic-functions
-                   '(typst-overlay-flymake eglot-flymake-backend)))
-    (typst-overlay-mode -1)
-    (should-not (memq #'typst-overlay--add-flymake-backend
-                      eglot-managed-mode-hook))))
+  (typst-overlay-test--with-batches
+      (replace-regexp-in-string "x_2" "BAD" (typst-overlay-test--equations 3))
+      (typst-overlay-test--error-at "BAD" "unknown variable: BAD")
+    (cl-flet ((backends ()
+                (mapcar #'flymake-diagnostic-backend (flymake-diagnostics)))
+              (error-face ()
+                (overlay-get (car (typst-overlay--error-overlays)) 'face)))
+      (flymake-mode 1)
+      (flymake-start)
+      (run-compiles)
+      (should (equal (backends) '(typst-overlay-flymake)))
+      ;; What Eglot does when it starts managing the buffer.
+      (setq-local flymake-diagnostic-functions
+                  (list (lambda (report-fn &rest _) (funcall report-fn nil))))
+      (flymake-mode 1)
+      (flymake-start)
+      (should-not (backends))
+      (should (eq (error-face) 'typst-overlay-error))
+      ;; Later compiles are not reported either.
+      (typst-overlay-refresh)
+      (run-compiles)
+      (should-not (backends))
+      (flymake-mode -1))))
+
+(ert-deftest typst-overlay-test-error-not-shown-over-flymake ()
+  "The error is not shown where Flymake already shows a diagnostic."
+  (with-temp-buffer
+    (insert "Bad $ac$ end.")
+    (typst-overlay--place-error-overlay
+     (typst-overlay-test--element 5 "$ac$") "unknown variable: ac")
+    (let (shown)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args) (push (apply #'format fmt args) shown)))
+                ((symbol-function 'flymake-diagnostics)
+                 (lambda (&rest _) '(diagnostic))))
+        (setq-local flymake-mode t)
+        (goto-char 6)
+        (typst-overlay--echo-error-at-point))
+      (should-not shown))))
 
 ;;; Image size
 

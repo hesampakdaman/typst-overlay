@@ -38,7 +38,7 @@ Turning on =flymake-mode= alongside =typst-overlay-mode= is recommended, as in t
 
 Errors are those of the last refresh, so they update when overlays are refreshed, for example on save.
 
-This also works alongside Eglot, which normally replaces a buffer's Flymake backends with its own: the backend is added back when Eglot starts. With a Typst language server such as =tinymist=, a broken equation may then be reported by both.
+In buffers managed by Eglot, for example with =tinymist=, the language server reports compile errors itself, so typst-overlay leaves Flymake to it rather than report each error twice. Equations that fail to render are still underlined.
 
 ** Configuration
 All options are available via =M-x customize-group RET typst-overlay=.
