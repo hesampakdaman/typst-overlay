@@ -25,6 +25,8 @@ Equations that fail to compile are underlined (face =typst-overlay-error=); move
     (typst-overlay-scale 1.0)
     (typst-overlay-max-active-compiles 8)
     :hook ((typst-ts-mode . typst-overlay-mode)
+           ;; Report equations that fail to compile (see Flymake below)
+           (typst-ts-mode . flymake-mode)
            (after-save . typst-overlay-save-refresh)))
 #+end_src
 
@@ -32,11 +34,18 @@ Equations that fail to compile are underlined (face =typst-overlay-error=); move
 Enable the minor mode with =M-x typst-overlay-mode=. To render overlays manually run =M-x typst-overlay-refresh=.
 
 ** Flymake
-=typst-overlay-mode= adds the backend =typst-overlay-flymake= to =flymake-diagnostic-functions=, so just enable =flymake-mode= in the same buffer:
-#+begin_src emacs-lisp
-  (add-hook 'typst-ts-mode-hook #'flymake-mode)
-#+end_src
+Turning on =flymake-mode= alongside =typst-overlay-mode= is recommended, as in the installation example above. =typst-overlay-mode= adds the backend =typst-overlay-flymake= to =flymake-diagnostic-functions=, so equations that fail to compile are listed by =flymake-show-buffer-diagnostics= and visited with =flymake-goto-next-error=. The same works in org buffers with =(org-mode . flymake-mode)=.
+
 Errors are those of the last refresh, so they update when overlays are refreshed, for example on save.
+
+Eglot replaces a buffer's Flymake backends with its own. To keep equation errors in buffers managed by Eglot, for example with =tinymist=, add the backend back:
+#+begin_src emacs-lisp
+  (add-hook 'eglot-managed-mode-hook
+            (lambda ()
+              (when (bound-and-true-p typst-overlay-mode)
+                (add-hook 'flymake-diagnostic-functions
+                          #'typst-overlay-flymake nil t))))
+#+end_src
 
 ** Configuration
 All options are available via =M-x customize-group RET typst-overlay=.
