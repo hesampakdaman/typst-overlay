@@ -851,18 +851,14 @@ This holds whether Eglot starts before or after the mode."
     (typst-overlay-mode -1)
     (should-not (memq #'typst-overlay--eldoc eldoc-documentation-functions))))
 
-(ert-deftest typst-overlay-test-theme-change-after-cache-deleted ()
-  "Changing theme after the cache folder is deleted compiles again."
-  (skip-unless (treesit-language-available-p 'typst))
-  (let ((typst-overlay-max-active-compiles 1))
-    (typst-overlay-test--with-batches (typst-overlay-test--equations 2) #'ignore
-      (run-compiles)
-      (should (equal batches '(2)))
-      (delete-directory (expand-file-name typst-overlay-cache-dir-name dir) t)
-      (typst-overlay--on-theme-change)
-      (should (equal batches '(2 2)))
-      (run-compiles)
-      (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 2)))))
+(ert-deftest typst-overlay-test-read-svg ()
+  "Black is drawn in the text color; other colors are kept."
+  (let ((file (make-temp-file "typst-overlay-test-" nil ".svg"
+                              "<path fill=\"#000000\" stroke=\"#000000\"/><path fill=\"#ff0000\"/>")))
+    (unwind-protect
+        (should (equal (typst-overlay--read-svg file)
+                       "<path fill=\"currentColor\" stroke=\"currentColor\"/><path fill=\"#ff0000\"/>"))
+      (delete-file file))))
 
 ;;; Image size
 

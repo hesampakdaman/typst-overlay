@@ -1032,14 +1032,15 @@ Flymake already shows a diagnostic, which Flymake documents itself."
                  (typst-overlay-record-state record) 'stale)))
        (typst-overlay-registry-records typst-overlay--registry)))))
 
-(defun typst-overlay--recolor-svg (svg-path)
-  "Read SVG-PATH and replace black with the current foreground color."
-  (let ((fg (typst-overlay--foreground-color))
-        (contents (with-temp-buffer
+(defun typst-overlay--read-svg (svg-path)
+  "Read SVG-PATH, drawing its black in the color of the text around it.
+Emacs paints `currentColor' in the foreground of the text an image is
+shown in, so equations follow theme changes without being reread."
+  (let ((contents (with-temp-buffer
                     (insert-file-contents svg-path)
                     (buffer-string))))
     (replace-regexp-in-string
-     (regexp-quote "#000000") fg contents t t)))
+     (regexp-quote "#000000") "currentColor" contents t t)))
 
 (defconst typst-overlay--typst-font-size 11.0
   "Typst's default text size in points, which equations are compiled at.")
@@ -1059,7 +1060,7 @@ falls back to a fixed `typst-overlay-scale'."
 
 (defun typst-overlay--place-overlay-from-svg (beg end svg-path)
   "Create and return an overlay from BEG to END displaying SVG-PATH."
-  (let* ((svg-data (typst-overlay--recolor-svg svg-path))
+  (let* ((svg-data (typst-overlay--read-svg svg-path))
          (image (typst-overlay--create-image svg-data))
          (overlay (make-overlay beg end nil t nil)))
     (overlay-put overlay 'display image)
@@ -1071,41 +1072,6 @@ falls back to a fixed `typst-overlay-scale'."
       (typst-overlay--hide-overlay overlay)
       (setq typst-overlay--active-overlay overlay))
     overlay))
-
-(defun typst-overlay--recolor-all-overlays ()
-  "Recolor all visible overlays to match the current foreground.
-Overlays whose SVG is no longer on disk are rendered again."
-  (when (and typst-overlay-mode typst-overlay--registry)
-    (let (missing)
-      (maphash
-       (lambda (_key record)
-         (when (eq (typst-overlay-record-state record) 'visible)
-           (let* ((artifact (typst-overlay-record-artifact record))
-                  (overlay (typst-overlay-record-overlay record)))
-             (cond
-              ((not (overlayp overlay)))
-              ((typst-overlay--artifact-live-p artifact)
-               (let* ((svg-data (typst-overlay--recolor-svg
-                                 (typst-overlay-artifact-svg-path artifact)))
-                      (image (typst-overlay--create-image svg-data)))
-                 (overlay-put overlay 'typst-overlay-image image)
-                 (unless (eq overlay typst-overlay--active-overlay)
-                   (overlay-put overlay 'display image))))
-              (t
-               (typst-overlay--delete-record-overlay record)
-               (setf (typst-overlay-record-state record) 'stale)
-               (setq missing t))))))
-       (typst-overlay-registry-records typst-overlay--registry))
-      (when missing
-        (typst-overlay-refresh)))))
-
-(defun typst-overlay--on-theme-change (&rest _)
-  "Handle theme changes by recoloring overlays in all typst-overlay buffers."
-  (dolist (buf (buffer-list))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (when typst-overlay-mode
-          (typst-overlay--recolor-all-overlays))))))
 
 (defun typst-overlay--teardown ()
   "Remove overlays and clear buffer-local runtime state."
@@ -1250,11 +1216,6 @@ prelude fails every job with the same prelude."
   (mapcar (lambda (file)
             (cons (string-to-number (file-name-base file)) file))
           (directory-files dir t "\\`[0-9]+\\.svg\\'")))
-
-(defun typst-overlay--foreground-color ()
-  "Return the default face's foreground color, or black."
-  (let ((fg (face-foreground 'default nil t)))
-    (if (stringp fg) fg "#000000")))
 
 (defun typst-overlay--drain-compile-queue ()
   "Start queued batches until the concurrency limit is reached."
@@ -1663,8 +1624,6 @@ Intended for use in `after-save-hook'."
   (typst-overlay--ensure-runtime)
   (setq typst-overlay--last-point (point))
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
-  (add-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
-  (add-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
   (add-hook 'eglot-managed-mode-hook #'typst-overlay--add-flymake-backend nil t)
   (add-hook 'eldoc-documentation-functions #'typst-overlay--eldoc nil t)
   ;; Org buffers, for one, have no ElDoc function until now.
@@ -1676,8 +1635,6 @@ Intended for use in `after-save-hook'."
 (defun typst-overlay--disable ()
   "Tear down `typst-overlay-mode' in the current buffer."
   (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
-  (remove-hook 'enable-theme-functions #'typst-overlay--on-theme-change)
-  (remove-hook 'disable-theme-functions #'typst-overlay--on-theme-change)
   (kill-local-variable 'typst-overlay--last-point)
   (typst-overlay--teardown)
   ;; Clear the diagnostics of the overlays just deleted.
