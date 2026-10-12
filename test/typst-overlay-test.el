@@ -67,6 +67,8 @@ The case name is part of the compared value so failures show it."
     ("adjacent" "$alpha$$beta$" ("$alpha$" "$beta$"))
     ("display on one line" "Sum: $ x + y $ done." ("$ x + y $"))
     ("display block" "$\n  x = 1\n$" ("$\n  x = 1\n$"))
+    ("indented display block" "  $\n  x\n  $" ("$\n  x\n  $"))
+    ("display closing on content line" "$\n  x = 1 $" ("$\n  x = 1 $"))
     ("inline wrapped across lines" "so $a +\nb$ holds" ("$a +\nb$"))
     ("escaped backslash before $" "a \\\\$x$ b" ("$x$"))
     ("after stray $ and blank line" "a $ b\n\nlater $z$" ("$z$"))
