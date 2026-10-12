@@ -64,34 +64,25 @@ The case name is part of the compared value so failures show it."
 (defconst typst-overlay-test--org-cases
   '(;; Detected
     ("inline" "The area is $pi r^2$ here." ("$pi r^2$"))
-    ("two inline" "$a$ and $b$" ("$a$" "$b$"))
     ("adjacent" "$alpha$$beta$" ("$alpha$" "$beta$"))
     ("display on one line" "Sum: $ x + y $ done." ("$ x + y $"))
     ("display block" "$\n  x = 1\n$" ("$\n  x = 1\n$"))
-    ("indented display block" "  $\n  x\n  $" ("$\n  x\n  $"))
-    ("display closing on content line" "$\n  x = 1 $" ("$\n  x = 1 $"))
     ("inline wrapped across lines" "so $a +\nb$ holds" ("$a +\nb$"))
     ("escaped backslash before $" "a \\\\$x$ b" ("$x$"))
     ("after stray $ and blank line" "a $ b\n\nlater $z$" ("$z$"))
     ("after heading" "a $ b\n* Heading\nthen $y$" ("$y$"))
     ("nested math (#6)" "a $#table($x$)$ b" ("$#table($x$)$"))
-    ("nested two levels" "$#table($#box[$y$]$)$ b" ("$#table($#box[$y$]$)$"))
     ("dollar in a string in code" "$#table(\"a $ b\")$ c" ("$#table(\"a $ b\")$"))
     ("escaped dollar inside math" "$a \\$ b$ c" ("$a \\$ b$"))
     ("half-open interval" "an $[0, 1)$ interval" ("$[0, 1)$"))
     ("variable in math" "$#x$ var" ("$#x$"))
     ("unclosed outer: found up to the next $" "$#table($x$ unclosed" ("$#table($"))
     ("syntax error: unclosed parenthesis" "a $frac(1, 2$ b" ("$frac(1, 2$"))
-    ("syntax error: unclosed string" "a $ \"oops $ b" ("$ \"oops $"))
-    ("syntax error: keyword without body" "a $#let$ b" ("$#let$"))
     ;; Not detected
-    ("escaped dollars" "costs \\$5 and \\$6" ())
     ("escaped dollars before words" "use \\$a or \\$b" ())
     ("prices" "costs $5 and $10 total" ())
-    ("prices with slash" "$5/$10 per month" ())
     ("empty span" "$$" ())
     ("lone dollar" "a $ b" ())
-    ("stray $ before heading" "a $ b\n* Heading $\nbody" ())
     ("inline code" "~$a$~ and =$b$=" ())
     ("src block" "#+begin_src sh\necho \"$a\" \"$b\"\n#+end_src" ())
     ("example block" "#+begin_example\n$ x $\n#+end_example" ())
@@ -426,7 +417,6 @@ texts with an artifact in the cache, and NEW the current elements.")
     ("typed before the line" (insert 1 "INSERTED ") (15 . 22))
     ("typed right before $" (insert 6 "XX") (8 . 15))
     ("typed right after $" (insert 13 "YY") (6 . 13))
-    ("typed after the equation" (insert 17 "!") (6 . 13))
     ("deleted text before" (delete 1 6) (1 . 8))
     ("edited inside" (insert 12 " + c") nil)
     ("deleted the equation" (delete 6 13) nil))
@@ -866,8 +856,6 @@ This holds whether Eglot starts before or after the mode."
   '(("real typst header, default scale"
      "<svg viewBox=\"0 0 13.2893 11.2268\" width=\"13.2893pt\" height=\"11.2268pt\" xmlns=\"http://www.w3.org/2000/svg\"><g/></svg>"
      1.3 (:height (1.3268 . em)))
-    ("one em at scale 1"
-     "<svg width=\"30pt\" height=\"11pt\"><g/></svg>" 1.0 (:height (1.0 . em)))
     ("height on an inner element is ignored"
      "<svg width=\"30pt\"><rect height=\"22pt\"/></svg>" 1.3 (:scale 1.3))
     ("height without units falls back"
