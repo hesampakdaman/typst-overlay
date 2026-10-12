@@ -687,6 +687,12 @@ The resulting diff contains:
   cache-key    ;; string: render identity
   svg-path)    ;; string: path to rendered svg
 
+(defun typst-overlay--artifact-live-p (artifact)
+  "Return non-nil if ARTIFACT's SVG is still on disk.
+The cache folder may be deleted while overlays are shown."
+  (and artifact
+       (file-exists-p (typst-overlay-artifact-svg-path artifact))))
+
 (cl-defstruct typst-overlay-record
   element      ;; typst-overlay-element (current occurrence)
   state        ;; 'rendering 'visible 'stale 'failed
@@ -793,7 +799,7 @@ Cases:
                 (record (typst-overlay--get-record registry old-element))
                 (artifact (and record (typst-overlay-record-artifact record)))
                 (overlay (and record (typst-overlay-record-overlay record))))
-           (when (and artifact (null overlay))
+           (when (and (typst-overlay--artifact-live-p artifact) (null overlay))
              (push (make-typst-overlay-place-op
                     :old old-element
                     :new new-element
@@ -806,7 +812,7 @@ Cases:
                 (record (typst-overlay--get-record registry old-element))
                 (artifact (and record
                                (typst-overlay-record-artifact record))))
-           (when artifact
+           (when (typst-overlay--artifact-live-p artifact)
              (push (make-typst-overlay-place-op
                     :old old-element
                     :new new-element
@@ -817,7 +823,7 @@ Cases:
          (let* ((new-element (typst-overlay-diff-entry-new entry))
                 (cache-key (typst-overlay-element-cache-key new-element))
                 (artifact (gethash cache-key artifact-cache)))
-           (when artifact
+           (when (typst-overlay--artifact-live-p artifact)
              (push (make-typst-overlay-place-op
                     :old nil
                     :new new-element
@@ -842,7 +848,8 @@ Cases:
                 (record (typst-overlay--get-record registry old-element)))
            (when (and record
                       (eq (typst-overlay-record-state record) 'stale)
-                      (null (typst-overlay-record-artifact record)))
+                      (not (typst-overlay--artifact-live-p
+                            (typst-overlay-record-artifact record))))
              (push (make-typst-overlay-render-op
                     :old old-element
                     :new new-element)
@@ -854,7 +861,7 @@ Cases:
                 (record (typst-overlay--get-record registry old-element))
                 (artifact (and record
                                (typst-overlay-record-artifact record))))
-           (unless artifact
+           (unless (typst-overlay--artifact-live-p artifact)
              (push (make-typst-overlay-render-op
                     :old old-element
                     :new new-element)
@@ -864,7 +871,7 @@ Cases:
          (let* ((new-element (typst-overlay-diff-entry-new entry))
                 (cache-key (typst-overlay-element-cache-key new-element))
                 (artifact (gethash cache-key artifact-cache)))
-           (unless artifact
+           (unless (typst-overlay--artifact-live-p artifact)
              (push (make-typst-overlay-render-op
                     :old nil
                     :new new-element)
@@ -1066,21 +1073,31 @@ falls back to a fixed `typst-overlay-scale'."
     overlay))
 
 (defun typst-overlay--recolor-all-overlays ()
-  "Recolor all visible overlays to match the current foreground."
+  "Recolor all visible overlays to match the current foreground.
+Overlays whose SVG is no longer on disk are rendered again."
   (when (and typst-overlay-mode typst-overlay--registry)
-    (maphash
-     (lambda (_key record)
-       (when (eq (typst-overlay-record-state record) 'visible)
-         (let* ((artifact (typst-overlay-record-artifact record))
-                (overlay (typst-overlay-record-overlay record)))
-           (when (and artifact (overlayp overlay))
-             (let* ((svg-data (typst-overlay--recolor-svg
-                               (typst-overlay-artifact-svg-path artifact)))
-                    (image (typst-overlay--create-image svg-data)))
-               (overlay-put overlay 'typst-overlay-image image)
-               (unless (eq overlay typst-overlay--active-overlay)
-                 (overlay-put overlay 'display image)))))))
-     (typst-overlay-registry-records typst-overlay--registry))))
+    (let (missing)
+      (maphash
+       (lambda (_key record)
+         (when (eq (typst-overlay-record-state record) 'visible)
+           (let* ((artifact (typst-overlay-record-artifact record))
+                  (overlay (typst-overlay-record-overlay record)))
+             (cond
+              ((not (overlayp overlay)))
+              ((typst-overlay--artifact-live-p artifact)
+               (let* ((svg-data (typst-overlay--recolor-svg
+                                 (typst-overlay-artifact-svg-path artifact)))
+                      (image (typst-overlay--create-image svg-data)))
+                 (overlay-put overlay 'typst-overlay-image image)
+                 (unless (eq overlay typst-overlay--active-overlay)
+                   (overlay-put overlay 'display image))))
+              (t
+               (typst-overlay--delete-record-overlay record)
+               (setf (typst-overlay-record-state record) 'stale)
+               (setq missing t))))))
+       (typst-overlay-registry-records typst-overlay--registry))
+      (when missing
+        (typst-overlay-refresh)))))
 
 (defun typst-overlay--on-theme-change (&rest _)
   "Handle theme changes by recoloring overlays in all typst-overlay buffers."

@@ -305,17 +305,22 @@ Return the `user-error' message and whether the mode stayed on."
                              (typst-overlay-test--snapshot old)
                              (typst-overlay-test--snapshot new)))))))))
 
-(defun typst-overlay-test--artifact (element)
-  "Return a fake artifact for ELEMENT."
+(defconst typst-overlay-test--file (or load-file-name buffer-file-name)
+  "This file, standing in for an SVG that exists on disk.")
+
+(defun typst-overlay-test--artifact (element &optional deleted)
+  "Return a fake artifact for ELEMENT.
+Its SVG exists on disk, unless DELETED."
   (make-typst-overlay-artifact
    :cache-key (typst-overlay-element-cache-key element)
-   :svg-path "unused.svg"))
+   :svg-path (if deleted "deleted.svg" typst-overlay-test--file)))
 
 (defun typst-overlay-test--registry (old)
   "Return a registry with a record for each (BEG TEXT STATE) in OLD.
 Records that are `visible' or `stale' have an artifact; only
 `visible' ones have an overlay, represented by a placeholder.  The
-pseudo-state `stale-no-artifact' is a `stale' record without one."
+pseudo-state `stale-no-artifact' is a `stale' record without one, and
+`deleted' a `visible' record whose SVG was deleted from disk."
   (let ((registry (typst-overlay--make-registry)))
     (dolist (spec old)
       (pcase-let* ((`(,beg ,text ,state) spec)
@@ -324,10 +329,14 @@ pseudo-state `stale-no-artifact' is a `stale' record without one."
          registry element
          (make-typst-overlay-record
           :element element
-          :state (if (eq state 'stale-no-artifact) 'stale state)
-          :overlay (and (eq state 'visible) 'overlay)
-          :artifact (and (memq state '(visible stale))
-                         (typst-overlay-test--artifact element))
+          :state (pcase state
+                   ('stale-no-artifact 'stale)
+                   ('deleted 'visible)
+                   (_ state))
+          :overlay (and (memq state '(visible deleted)) 'overlay)
+          :artifact (and (memq state '(visible stale deleted))
+                         (typst-overlay-test--artifact
+                          element (eq state 'deleted)))
           :generation 1))))
     registry))
 
@@ -365,6 +374,9 @@ pseudo-state `stale-no-artifact' is a `stale' record without one."
     ("moved: image reused"
      ((1 "$a$" visible)) () ((5 "$a$"))
      (:delete () :place (5) :render ()))
+    ("moved, image deleted from disk: compiled again"
+     ((1 "$a$" deleted)) () ((5 "$a$"))
+     (:delete () :place () :render (5)))
     ("moved while compiling: compiled again"
      ((1 "$a$" rendering)) () ((5 "$a$"))
      (:delete () :place () :render (5)))
@@ -838,6 +850,19 @@ This holds whether Eglot starts before or after the mode."
     (should (memq #'typst-overlay--eldoc eldoc-documentation-functions))
     (typst-overlay-mode -1)
     (should-not (memq #'typst-overlay--eldoc eldoc-documentation-functions))))
+
+(ert-deftest typst-overlay-test-theme-change-after-cache-deleted ()
+  "Changing theme after the cache folder is deleted compiles again."
+  (skip-unless (treesit-language-available-p 'typst))
+  (let ((typst-overlay-max-active-compiles 1))
+    (typst-overlay-test--with-batches (typst-overlay-test--equations 2) #'ignore
+      (run-compiles)
+      (should (equal batches '(2)))
+      (delete-directory (expand-file-name typst-overlay-cache-dir-name dir) t)
+      (typst-overlay--on-theme-change)
+      (should (equal batches '(2 2)))
+      (run-compiles)
+      (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 2)))))
 
 ;;; Image size
 
