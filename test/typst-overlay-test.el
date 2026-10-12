@@ -6,9 +6,8 @@
 
 ;; Table-driven tests.  Detection cases are (NAME INPUT EXPECTED),
 ;; where EXPECTED is the list of equation texts, in buffer order, that
-;; should be detected in INPUT.  Pipeline cases cover how old and new
-;; equations are matched (the diff) and whether each one is placed,
-;; compiled or left alone (the plan).
+;; should be detected in INPUT.  Edit cases cover what is compiled
+;; again after the buffer changes, and what each equation then shows.
 ;;
 ;; Run with:
 ;;
@@ -229,11 +228,7 @@ Return the `user-error' message and whether the mode stayed on."
     (should (string-match-p (regexp-quote typst-overlay--grammar-url) message))
     (should-not mode)))
 
-;;; Pipeline
-
-;; Elements are written as (BEG TEXT); old elements in plan cases as
-;; (BEG TEXT STATE), where STATE is the record state before refresh.
-;; Results are summarized by element start positions.
+;;; Elements
 
 (defun typst-overlay-test--element (beg text)
   "Return an element for TEXT starting at BEG, with no prelude."
@@ -243,175 +238,6 @@ Return the `user-error' message and whether the mode stayed on."
                                  :text text
                                  :text-hash (md5 text))
    nil))
-
-(defun typst-overlay-test--snapshot (specs)
-  "Return a snapshot of elements built from SPECS, a list of (BEG TEXT)."
-  (make-typst-overlay-snapshot
-   :elements (mapcar (lambda (spec)
-                       (typst-overlay-test--element (nth 0 spec) (nth 1 spec)))
-                     specs)))
-
-(defun typst-overlay-test--beg (element)
-  "Return the start of ELEMENT, or nil if ELEMENT is nil."
-  (and element (typst-overlay-element-beg element)))
-
-(defun typst-overlay-test--summarize-diff (diff)
-  "Summarize DIFF as (:entries ((STATUS OLD-BEG NEW-BEG) ...) :deleted BEGS)."
-  (list :entries (mapcar (lambda (entry)
-                           (list (typst-overlay-diff-entry-status entry)
-                                 (typst-overlay-test--beg
-                                  (typst-overlay-diff-entry-old entry))
-                                 (typst-overlay-test--beg
-                                  (typst-overlay-diff-entry-new entry))))
-                         (typst-overlay-diff-entries diff))
-        :deleted (mapcar #'typst-overlay-test--beg
-                         (typst-overlay-diff-deleted diff))))
-
-(defconst typst-overlay-test--diff-cases
-  '(("nothing changed"
-     ((1 "$a$") (10 "$b$")) ((1 "$a$") (10 "$b$"))
-     (:entries ((unchanged 1 1) (unchanged 10 10)) :deleted ()))
-    ("first equation"
-     () ((1 "$a$"))
-     (:entries ((added nil 1)) :deleted ()))
-    ("one edited"
-     ((1 "$a$") (10 "$b$")) ((1 "$a$") (10 "$c$"))
-     (:entries ((unchanged 1 1) (added nil 10)) :deleted (10)))
-    ("shifted by text above"
-     ((1 "$a$") (10 "$b$")) ((1 "$a$") (15 "$b$"))
-     (:entries ((unchanged 1 1) (moved 10 15)) :deleted ()))
-    ("one deleted"
-     ((1 "$a$") (10 "$b$")) ((1 "$a$"))
-     (:entries ((unchanged 1 1)) :deleted (10)))
-    ("swapped"
-     ((1 "$a$") (10 "$b$")) ((1 "$b$") (10 "$a$"))
-     (:entries ((moved 10 1) (moved 1 10)) :deleted ()))
-    ("duplicate, second removed"
-     ((1 "$x$") (10 "$x$")) ((1 "$x$"))
-     (:entries ((unchanged 1 1)) :deleted (10)))
-    ("duplicate, matched in order"
-     ((1 "$x$") (10 "$x$")) ((5 "$x$"))
-     (:entries ((moved 1 5)) :deleted (10))))
-  "Diff cases: (NAME OLD NEW EXPECTED).")
-
-(ert-deftest typst-overlay-test-diff ()
-  "Old and new elements are matched as expected."
-  (dolist (case typst-overlay-test--diff-cases)
-    (pcase-let ((`(,name ,old ,new ,expected) case))
-      (should (equal (list name expected)
-                     (list name
-                           (typst-overlay-test--summarize-diff
-                            (typst-overlay--diff-snapshots
-                             (typst-overlay-test--snapshot old)
-                             (typst-overlay-test--snapshot new)))))))))
-
-(defconst typst-overlay-test--file (or load-file-name buffer-file-name)
-  "This file, standing in for an SVG that exists on disk.")
-
-(defun typst-overlay-test--artifact (element &optional deleted)
-  "Return a fake artifact for ELEMENT.
-Its SVG exists on disk, unless DELETED."
-  (make-typst-overlay-artifact
-   :cache-key (typst-overlay-element-cache-key element)
-   :svg-path (if deleted "deleted.svg" typst-overlay-test--file)))
-
-(defun typst-overlay-test--registry (old)
-  "Return a registry with a record for each (BEG TEXT STATE) in OLD.
-Records that are `visible' or `stale' have an artifact; only
-`visible' ones have an overlay, represented by a placeholder.  The
-pseudo-state `stale-no-artifact' is a `stale' record without one, and
-`deleted' a `visible' record whose SVG was deleted from disk."
-  (let ((registry (typst-overlay--make-registry)))
-    (dolist (spec old)
-      (pcase-let* ((`(,beg ,text ,state) spec)
-                   (element (typst-overlay-test--element beg text)))
-        (typst-overlay--put-record
-         registry element
-         (make-typst-overlay-record
-          :element element
-          :state (pcase state
-                   ('stale-no-artifact 'stale)
-                   ('deleted 'visible)
-                   (_ state))
-          :overlay (and (memq state '(visible deleted)) 'overlay)
-          :artifact (and (memq state '(visible stale deleted))
-                         (typst-overlay-test--artifact
-                          element (eq state 'deleted)))
-          :generation 1))))
-    registry))
-
-(defun typst-overlay-test--artifact-cache (texts)
-  "Return an artifact cache holding an artifact for each of TEXTS."
-  (let ((cache (typst-overlay--make-artifact-cache)))
-    (dolist (text texts)
-      (let ((artifact (typst-overlay-test--artifact
-                       (typst-overlay-test--element 1 text))))
-        (puthash (typst-overlay-artifact-cache-key artifact) artifact cache)))
-    cache))
-
-(defun typst-overlay-test--summarize-plan (plan)
-  "Summarize PLAN as (:delete OLD-BEGS :place NEW-BEGS :render NEW-BEGS)."
-  (list :delete (mapcar (lambda (op)
-                          (typst-overlay-test--beg (typst-overlay-delete-op-old op)))
-                        (typst-overlay-render-plan-delete plan))
-        :place (mapcar (lambda (op)
-                         (typst-overlay-test--beg (typst-overlay-place-op-new op)))
-                       (typst-overlay-render-plan-place plan))
-        :render (mapcar (lambda (op)
-                          (typst-overlay-test--beg (typst-overlay-render-op-new op)))
-                        (typst-overlay-render-plan-render plan))))
-
-(defconst typst-overlay-test--plan-cases
-  '(("visible and unchanged: nothing to do"
-     ((1 "$a$" visible)) () ((1 "$a$"))
-     (:delete () :place () :render ()))
-    ("new, in cache: placed without compiling"
-     () ("$a$") ((1 "$a$"))
-     (:delete () :place (1) :render ()))
-    ("new, not in cache: compiled"
-     () () ((1 "$a$"))
-     (:delete () :place () :render (1)))
-    ("moved: image reused"
-     ((1 "$a$" visible)) () ((5 "$a$"))
-     (:delete () :place (5) :render ()))
-    ("moved, image deleted from disk: compiled again"
-     ((1 "$a$" deleted)) () ((5 "$a$"))
-     (:delete () :place () :render (5)))
-    ("moved while compiling: compiled again"
-     ((1 "$a$" rendering)) () ((5 "$a$"))
-     (:delete () :place () :render (5)))
-    ("edited: old removed, new compiled"
-     ((1 "$a$" visible)) () ((1 "$b$"))
-     (:delete (1) :place () :render (1)))
-    ("stale with image: image reused"
-     ((1 "$a$" stale)) () ((1 "$a$"))
-     (:delete () :place (1) :render ()))
-    ("stale without image: compiled"
-     ((1 "$a$" stale-no-artifact)) () ((1 "$a$"))
-     (:delete () :place () :render (1)))
-    ("failed and unchanged: not retried"
-     ((1 "$a$" failed)) () ((1 "$a$"))
-     (:delete () :place () :render ())))
-  "Plan cases: (NAME OLD CACHED NEW EXPECTED).
-OLD is the previous elements with their record states, CACHED the
-texts with an artifact in the cache, and NEW the current elements.")
-
-(ert-deftest typst-overlay-test-plan ()
-  "Each element is placed, compiled or left alone as expected."
-  (dolist (case typst-overlay-test--plan-cases)
-    (pcase-let ((`(,name ,old ,cached ,new ,expected) case))
-      (let ((diff (typst-overlay--diff-snapshots
-                   (typst-overlay-test--snapshot
-                    (mapcar (lambda (spec) (list (nth 0 spec) (nth 1 spec))) old))
-                   (typst-overlay-test--snapshot new))))
-        (should (equal (list name expected)
-                       (list name
-                             (typst-overlay-test--summarize-plan
-                              (typst-overlay--plan-render
-                               diff
-                               (typst-overlay-test--registry old)
-                               (typst-overlay-test--artifact-cache cached)
-                               2)))))))))
 
 ;;; Async placement
 
@@ -627,16 +453,28 @@ MESSAGE is the error it reports there."
                                  (split-string source "\n"))))
       (and index (format "<stdin>:%d:1: error: %s\n" (1+ index) message)))))
 
+(defun typst-overlay-test--source-equations (source)
+  "Return the equation texts in batch SOURCE, one per page, in order."
+  (let ((start 0) equations)
+    (while (string-match "^#counter(math.equation).update(0)\n\\(\\(?:.\\|\n\\)*?\\)\n]$"
+                         source start)
+      (push (match-string 1 source) equations)
+      (setq start (match-end 0)))
+    (nreverse equations)))
+
 (defmacro typst-overlay-test--with-batches (text behavior &rest body)
   "Enable the mode on an org file with TEXT, compiling with a fake typst.
 BEHAVIOR is called with each batch source and returns nil to succeed
-or typst's error output to fail.  Within BODY, `run-compiles' runs
-pending compiles until none are left, and `batches' lists the page
-counts of every compile started, in order."
+or typst's error output to fail.  Each SVG written names the equation
+it was rendered from.  Within BODY, `run-compiles' runs pending
+compiles until none are left, the newest first if given a non-nil
+argument.  `batches' lists the page counts of every compile started,
+and `compiled' the equations compiled, in order."
   (declare (indent 2))
   `(let ((dir (make-temp-file "typst-overlay-test-" t))
          (pending nil)
          (batches nil)
+         (compiled nil)
          (behavior ,behavior))
      (unwind-protect
          (cl-letf (((symbol-function 'executable-find)
@@ -645,27 +483,35 @@ counts of every compile started, in order."
                    ((symbol-function 'image-type-available-p)
                     (lambda (&rest _) t))
                    ((symbol-function 'create-image)
-                    (lambda (&rest _) '(image :type svg)))
+                    (lambda (data &rest _) (list 'image :type 'svg :data data)))
                    ((symbol-function 'typst-overlay--compile-async)
                     (lambda (source out callback)
                       (setq batches (append batches
                                             (list (typst-overlay-test--page-count
                                                    source))))
+                      (setq compiled (append compiled
+                                             (typst-overlay-test--source-equations
+                                              source)))
                       (setq pending (append pending
                                             (list (list source out callback)))))))
            (with-temp-buffer
              (setq buffer-file-name (expand-file-name "test.org" dir))
              (insert ,text)
              (org-mode)
-             (cl-flet ((run-compiles ()
+             (cl-flet ((run-compiles (&optional newest-first)
+                         (when newest-first
+                           (setq pending (reverse pending)))
                          (while pending
                            (pcase-let* ((`(,source ,out ,callback) (pop pending))
                                         (output (funcall behavior source)))
                              (unless output
-                               (dotimes (i (typst-overlay-test--page-count source))
-                                 (with-temp-file (expand-file-name
-                                                  (format "%d.svg" (1+ i)) out)
-                                   (insert "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>"))))
+                               (seq-do-indexed
+                                (lambda (equation i)
+                                  (with-temp-file (expand-file-name
+                                                   (format "%d.svg" (1+ i)) out)
+                                    (insert "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><!-- "
+                                            equation " --></svg>")))
+                                (typst-overlay-test--source-equations source)))
                              (funcall callback (null output) (or output ""))))))
                (typst-overlay-mode 1)
                ,@body
@@ -746,6 +592,109 @@ counts of every compile started, in order."
     (should (= typst-overlay--active-compiles 0))
     ;; Only the second enable's compiles placed overlays, once each.
     (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 3))))
+
+;;; Edits
+
+;; Each case is (NAME TEXT STEPS COMPILED SHOWN).  TEXT is rendered,
+;; then STEPS are applied, followed by a refresh and running every
+;; compile.  A step is (insert POS STRING), (replace FROM TO) for the
+;; first FROM, `refresh', `run', `run-newest-first' (compiles finish
+;; out of order), `delete-images' (the cache folder's SVGs are deleted)
+;; or `reopen' (the mode is turned off and on).  COMPILED is the
+;; equations compiled during STEPS, in order.  SHOWN describes each
+;; equation's overlay in buffer order: its text when it shows its own
+;; image, "TEXT showing OTHER" for another equation's image, and
+;; "TEXT failed" when underlined as failed.
+
+(defconst typst-overlay-test--edit-cases
+  '(("nothing changed" "$a$ and $b$" () () ("$a$" "$b$"))
+    ("text typed above: images reused"
+     "$a$ and $b$" ((insert 1 "New. ")) () ("$a$" "$b$"))
+    ("cut and pasted after the other: image reused"
+     "$a$ and $bb$" ((replace "$a$ and $bb$" "$bb$ and $a$")) () ("$bb$" "$a$"))
+    ("one edited: only it compiled"
+     "$a$ and $b$" ((replace "$b$" "$c$")) ("$c$") ("$a$" "$c$"))
+    ("one deleted"
+     "$a$ and $b$" ((replace " and $b$" "")) () ("$a$"))
+    ("duplicates, one deleted"
+     "$x$ and $x$ and $y$" ((replace "$x$ and " "")) () ("$x$" "$y$"))
+    ("duplicates, nothing changed"
+     "$x$ and $x$" () () ("$x$" "$x$"))
+    ("edited back: image reused from the cache"
+     "$a$ and $b$" ((replace "$b$" "$c$") refresh run (replace "$c$" "$b$"))
+     ("$c$") ("$a$" "$b$"))
+    ("edited and restored before a refresh: image reused"
+     "$a$ and $b$" ((replace "$b$" "$c$") (replace "$c$" "$b$")) () ("$a$" "$b$"))
+    ("reopened: images loaded from the cache folder"
+     "$a$ and $b$" (reopen) () ("$a$" "$b$"))
+    ("images deleted from disk, then moved: compiled again"
+     "$a$ and $b$" (delete-images (insert 1 "New. ")) ("$a$" "$b$") ("$a$" "$b$"))
+    ("images deleted from disk, edited and restored: compiled again"
+     "$a$ and $b$" (delete-images (replace "$b$" "$c$") (replace "$c$" "$b$"))
+     ("$b$") ("$a$" "$b$"))
+    ("failed and unchanged: not retried"
+     "$a$ and $BAD$" () () ("$a$" "$BAD$ failed"))
+    ("failed, edited and restored: retried"
+     "$a$ and $BAD$" ((replace "$BAD$" "$BAX$") (replace "$BAX$" "$BAD$"))
+     ("$BAD$") ("$a$" "$BAD$ failed"))
+    ("moved while compiling: compiled again"
+     "$a$ and $b$" ((replace "$b$" "$c$") refresh (insert 1 "New. "))
+     ("$c$" "$c$") ("$a$" "$c$"))
+    ("edited while compiling, results out of order: outdated one dropped"
+     "$a$ and $b$" ((replace "$b$" "$c$") refresh (replace "$c$" "$d$") refresh
+                    run-newest-first)
+     ("$c$" "$d$") ("$a$" "$d$"))
+    ("edited while failing, results out of order: outdated failure dropped"
+     "$a$ and $b$" ((replace "$b$" "$BAD$") refresh (replace "$BAD$" "$BAE$") refresh
+                    run-newest-first)
+     ("$BAD$" "$BAE$") ("$a$" "$BAE$")))
+  "Edit cases: (NAME TEXT STEPS COMPILED SHOWN).")
+
+(defun typst-overlay-test--shown ()
+  "Describe each equation overlay in the buffer, in order.
+See `typst-overlay-test--edit-cases'."
+  (mapcar (lambda (overlay)
+            (let ((text (buffer-substring-no-properties (overlay-start overlay)
+                                                        (overlay-end overlay)))
+                  (data (plist-get (cdr (overlay-get overlay 'typst-overlay-image))
+                                   :data)))
+              (cond
+               ((overlay-get overlay 'typst-overlay-error) (concat text " failed"))
+               ((string-match "<!-- \\(.*\\) -->" data)
+                (if (equal (match-string 1 data) text)
+                    text
+                  (format "%s showing %s" text (match-string 1 data)))))))
+          (sort (seq-filter (lambda (overlay)
+                              (or (overlay-get overlay 'typst-overlay)
+                                  (overlay-get overlay 'typst-overlay-error)))
+                            (overlays-in (point-min) (point-max)))
+                (lambda (a b) (< (overlay-start a) (overlay-start b))))))
+
+(ert-deftest typst-overlay-test-edits ()
+  "After edits, only what changed is compiled and each equation shows its image."
+  (skip-unless (treesit-language-available-p 'typst))
+  (dolist (case typst-overlay-test--edit-cases)
+    (pcase-let ((`(,name ,text ,steps ,expected-compiled ,expected-shown) case))
+      (typst-overlay-test--with-batches text
+          (typst-overlay-test--error-at "BAD" "unknown variable: BAD")
+        (run-compiles)
+        (setq compiled nil)
+        (dolist (step (append steps '(refresh run)))
+          (pcase step
+            (`(insert ,pos ,string) (goto-char pos) (insert string))
+            (`(replace ,from ,to)
+             (goto-char (point-min))
+             (search-forward from)
+             (replace-match to t t))
+            ('refresh (typst-overlay-refresh))
+            ('run (run-compiles))
+            ('run-newest-first (run-compiles t))
+            ('delete-images
+             (dolist (file (directory-files-recursively dir "\\.svg\\'"))
+               (delete-file file)))
+            ('reopen (typst-overlay-mode -1) (typst-overlay-mode 1))))
+        (should (equal (list name expected-compiled expected-shown)
+                       (list name compiled (typst-overlay-test--shown))))))))
 
 (ert-deftest typst-overlay-test-flymake ()
   "Failed equations are reported to Flymake, and still marked as failed."
