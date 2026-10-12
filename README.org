@@ -35,7 +35,10 @@ The recommended configuration:
 To render math in org buffers too, add =(org-mode . typst-overlay-mode)= and =(org-mode . flymake-mode)= to =:hook=.
 
 ** Usage
-Enable the minor mode with =M-x typst-overlay-mode=. To render overlays manually run =M-x typst-overlay-refresh=.
+Enable the minor mode with =M-x typst-overlay-mode=, or with a hook as above, and the buffer's equations are rendered. Editing an equation removes its overlay until the next refresh, which the =after-save-hook= above runs on save. To refresh by hand, run =M-x typst-overlay-refresh=.
+
+** Cache
+Rendered equations are saved as SVG files in a =.typst-overlay-cache= directory next to the file, so reopening it shows them without compiling again. Buffers without a file, such as those of =org-capture=, use one in the temporary directory instead. Old SVG files are not removed; the directory is safe to delete at any time, and equations are compiled again as needed. You may want to add it to your =.gitignore=.
 
 ** Flymake
 In org buffers, turn on =flymake-mode= alongside =typst-overlay-mode= and equations that fail to compile are reported to Flymake: listed by =flymake-show-buffer-diagnostics= and visited with =flymake-goto-next-error=. No language server checks math in org buffers, so typst-overlay is the only source of these errors there.
