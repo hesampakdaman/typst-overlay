@@ -602,6 +602,8 @@ and `compiled' the equations compiled, in order."
   '(("nothing changed" "$a$ and $b$" () () ("$a$" "$b$"))
     ("text typed above: images reused"
      "$a$ and $b$" ((insert 1 "New. ")) () ("$a$" "$b$"))
+    ("swapped: images reused"
+     "$a$ and $b$" ((replace "$a$ and $b$" "$b$ and $a$")) () ("$b$" "$a$"))
     ("cut and pasted after the other: image reused"
      "$a$ and $bb$" ((replace "$a$ and $bb$" "$bb$ and $a$")) () ("$bb$" "$a$"))
     ("one edited: only it compiled"

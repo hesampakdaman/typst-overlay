@@ -888,16 +888,40 @@ Cases:
 (defun typst-overlay--apply-render-plan (plan registry artifact-cache)
   "Apply PLAN by mutating REGISTRY and runtime state.
 ARTIFACT-CACHE is passed on when starting renders."
-  (let ((generation (typst-overlay-render-plan-generation plan)))
+  (let* ((generation (typst-overlay-render-plan-generation plan))
+         (place-ops (typst-overlay-render-plan-place plan))
+         (render-ops (typst-overlay-render-plan-render plan))
+         ;; Take out every old record before storing any new one: an
+         ;; element may move to where another one was, as when two are
+         ;; swapped, and would overwrite its record.
+         (place-records (mapcar (lambda (op)
+                                  (typst-overlay--take-record
+                                   registry (typst-overlay-place-op-old op)))
+                                place-ops))
+         (render-records (mapcar (lambda (op)
+                                   (typst-overlay--take-record
+                                    registry (typst-overlay-render-op-old op)))
+                                 render-ops)))
     (dolist (op (typst-overlay-render-plan-delete plan))
       (typst-overlay--apply-delete-op op registry))
-    (dolist (op (typst-overlay-render-plan-place plan))
-      (typst-overlay--apply-place-op op registry generation))
+    (cl-mapc (lambda (op record)
+               (typst-overlay--apply-place-op op record registry generation))
+             place-ops place-records)
     (typst-overlay--start-renders
-     (mapcar (lambda (op) (typst-overlay--apply-render-op op registry generation))
-             (typst-overlay-render-plan-render plan))
+     (cl-mapcar (lambda (op record)
+                  (typst-overlay--apply-render-op op record registry generation))
+                render-ops render-records)
      generation artifact-cache)
     (setf (typst-overlay-registry-generation registry) generation)))
+
+(defun typst-overlay--take-record (registry element)
+  "Remove the record for ELEMENT from REGISTRY and return it.
+Its overlay is deleted.  Return nil if ELEMENT is nil or has no record."
+  (let ((record (and element (typst-overlay--get-record registry element))))
+    (when record
+      (typst-overlay--delete-record-overlay record)
+      (typst-overlay--remove-record registry element))
+    record))
 
 (defun typst-overlay--apply-delete-op (op registry)
   "Apply delete OP by removing overlay and record from REGISTRY."
@@ -907,18 +931,12 @@ ARTIFACT-CACHE is passed on when starting renders."
       (typst-overlay--delete-record-overlay record)
       (typst-overlay--remove-record registry old-element))))
 
-(defun typst-overlay--apply-place-op (op registry generation)
+(defun typst-overlay--apply-place-op (op record registry generation)
   "Apply place OP by making its new element visible in REGISTRY.
+RECORD is the old element's record, already taken out, or nil.
 GENERATION stamps the record so stale async results can be ignored."
-  (let* ((old-element (typst-overlay-place-op-old op))
-         (new-element (typst-overlay-place-op-new op))
-         (artifact (typst-overlay-place-op-artifact op))
-         (record (and old-element
-                      (typst-overlay--get-record registry old-element))))
-    (when old-element
-      (when record
-        (typst-overlay--delete-record-overlay record))
-      (typst-overlay--remove-record registry old-element))
+  (let ((new-element (typst-overlay-place-op-new op))
+        (artifact (typst-overlay-place-op-artifact op)))
     (unless record
       (setq record (make-typst-overlay-record)))
     (setf (typst-overlay-record-element record) new-element
@@ -929,18 +947,12 @@ GENERATION stamps the record so stale async results can be ignored."
           (typst-overlay--place-artifact-overlay new-element artifact))
     (typst-overlay--put-record registry new-element record)))
 
-(defun typst-overlay--apply-render-op (op registry generation)
+(defun typst-overlay--apply-render-op (op record registry generation)
   "Apply render OP by registering its new element in REGISTRY.
-The record is stamped with GENERATION.  Return the new element, to be
-rendered by `typst-overlay--start-renders'."
-  (let* ((old-element (typst-overlay-render-op-old op))
-         (new-element (typst-overlay-render-op-new op))
-         (record (and old-element
-                      (typst-overlay--get-record registry old-element))))
-    (when old-element
-      (when record
-        (typst-overlay--delete-record-overlay record))
-      (typst-overlay--remove-record registry old-element))
+RECORD is the old element's record, already taken out, or nil.  It is
+stamped with GENERATION.  Return the new element, to be rendered by
+`typst-overlay--start-renders'."
+  (let ((new-element (typst-overlay-render-op-new op)))
     (unless record
       (setq record (make-typst-overlay-record)))
     (setf (typst-overlay-record-element record) new-element
