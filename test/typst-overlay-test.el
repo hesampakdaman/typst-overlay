@@ -785,6 +785,20 @@ This holds whether Eglot starts before or after the mode."
         (should-not (memq #'typst-overlay--add-flymake-backend
                           eglot-managed-mode-hook)))))))
 
+(ert-deftest typst-overlay-test-no-file ()
+  "Buffers without a file, such as org-capture's, cache in the temporary directory."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches "Text $x$." #'ignore
+    (let ((temporary-file-directory (file-name-as-directory
+                                     (expand-file-name "tmp" dir))))
+      (make-directory temporary-file-directory)
+      (typst-overlay-mode -1)
+      (setq buffer-file-name nil)
+      (typst-overlay-mode 1)
+      (run-compiles)
+      (should (equal (typst-overlay-test--shown) '("$x$")))
+      (should (directory-files-recursively temporary-file-directory "\\.svg\\'")))))
+
 (ert-deftest typst-overlay-test-eldoc-org ()
   "ElDoc is turned on in org buffers, which have no ElDoc function."
   (skip-unless (treesit-language-available-p 'typst))

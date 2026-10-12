@@ -69,7 +69,9 @@ headings."
   :group 'typst-overlay)
 
 (defcustom typst-overlay-cache-dir-name ".typst-overlay-cache"
-  "Name of the directory used to store rendered SVG files."
+  "Name of the directory used to store rendered SVG files.
+It is created next to the buffer's file, or in the variable
+`temporary-file-directory' for buffers without one."
   :type 'string
   :group 'typst-overlay)
 
@@ -716,10 +718,8 @@ The cache folder may be deleted while overlays are shown."
 
 (defun typst-overlay--load-artifact-cache ()
   "Populate artifact cache from SVG files already on disk."
-  (let* ((file (buffer-file-name))
-         (dir (and file (file-name-directory file)))
-         (cache-dir (and dir (expand-file-name typst-overlay-cache-dir-name dir))))
-    (when (and cache-dir (file-directory-p cache-dir))
+  (let ((cache-dir (typst-overlay--cache-dir)))
+    (when (file-directory-p cache-dir)
       (dolist (svg-path (directory-files cache-dir t "\\.svg\\'"))
         (let ((cache-key (file-name-base svg-path)))
           (puthash cache-key
@@ -1278,8 +1278,12 @@ ARTIFACT-CACHE receives the results.  SESSION is the
          (cache-dir (file-name-directory
                      (typst-overlay-job-svg-path (car jobs))))
          (dir (make-temp-file (expand-file-name "batch-" cache-dir) t))
-         ;; Resolve #import paths relative to the buffer's file.
-         (default-directory (file-name-directory (buffer-file-name buffer))))
+         ;; Resolve #import paths relative to the buffer's file, or for
+         ;; buffers without one, its directory.
+         (default-directory (with-current-buffer buffer
+                              (if buffer-file-name
+                                  (file-name-directory buffer-file-name)
+                                default-directory))))
     (typst-overlay--compile-async
      (car source) dir
      (lambda (ok output)
@@ -1530,16 +1534,21 @@ it stops, so this also runs from `eglot-managed-mode-hook'."
 ;; buffers too.  See `trusted-content'.
 (put 'typst-overlay-flymake 'flymake-always-safe t)
 
+(defun typst-overlay--cache-dir ()
+  "Return the directory for the current buffer's cached SVG files.
+It is next to the buffer's file.  Buffers without one, such as
+org-capture's, use one in the variable `temporary-file-directory'."
+  (expand-file-name typst-overlay-cache-dir-name
+                    (if buffer-file-name
+                        (file-name-directory buffer-file-name)
+                      temporary-file-directory)))
+
 (defun typst-overlay--artifact-svg-path (cache-key)
-  "Return the cached SVG path for CACHE-KEY in the current file's directory."
-  (let* ((file (buffer-file-name))
-         (dir (and file (file-name-directory file))))
-    (unless dir
-      (error "A file-backed buffer is required"))
-    (let ((cache-dir (expand-file-name typst-overlay-cache-dir-name dir)))
-      (unless (file-directory-p cache-dir)
-        (make-directory cache-dir t))
-      (expand-file-name (concat cache-key ".svg") cache-dir))))
+  "Return the cached SVG path for CACHE-KEY."
+  (let ((cache-dir (typst-overlay--cache-dir)))
+    (unless (file-directory-p cache-dir)
+      (make-directory cache-dir t))
+    (expand-file-name (concat cache-key ".svg") cache-dir)))
 
 (defun typst-overlay--invalidate-overlays-past-error (first-error)
   "Delete all overlays starting at or after FIRST-ERROR position."
