@@ -7,14 +7,14 @@ Render Typst math equations as inline overlays in Emacs. Equations are asynchron
 
 Equations that fail to render get a dotted red underline (face =typst-overlay-error=); move point into one, or hover over it, to see the error. They can also be reported to Flymake (see below).
 
+** Supported modes
+- =org-mode= — renders =$...$= as Typst math, following Typst's rules: =$x$= is inline and =$ x $= is display. Math may nest, as in =$#table($x$)$=. Write =\$= for a literal dollar sign. Math may span lines within a paragraph, and is ignored in code, verbatim and src blocks.
+- =typst-ts-mode= — renders all math equations in Typst documents
+
 ** Requirements
 - Emacs 29.1 or later, built with SVG support (most builds are)
 - [[https://typst.app][typst]] compiler available on =PATH=
 - [[https://github.com/uben0/tree-sitter-typst][Tree-sitter grammar for Typst]], used to find equations in both modes. It is already installed if you use =typst-ts-mode=; otherwise run =M-x treesit-install-language-grammar=.
-
-** Supported modes
-- =org-mode= — renders =$...$= as Typst math, following Typst's rules: =$x$= is inline and =$ x $= is display. Math may nest, as in =$#table($x$)$=. Write =\$= for a literal dollar sign. Math may span lines within a paragraph, and is ignored in code, verbatim and src blocks.
-- =typst-ts-mode= — renders all math equations in Typst documents
 
 ** Installation
 The recommended configuration:
