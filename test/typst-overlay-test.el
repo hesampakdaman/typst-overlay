@@ -862,6 +862,19 @@ See `typst-overlay-test--edit-cases'."
       (should (= (enter 'isearch-repeat-backward) 5))
       (should (= (enter 'mouse-set-point) 5)))))
 
+(ert-deftest typst-overlay-test-narrowed ()
+  "Refreshing a narrowed buffer keeps the equations outside it."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches "* A\n$a$\n* B\n$b$\n" #'ignore
+    (run-compiles)
+    (goto-char (point-min))
+    (search-forward "* B")
+    (narrow-to-region (point-min) (match-beginning 0))
+    (typst-overlay-refresh)
+    (run-compiles)
+    (widen)
+    (should (equal (typst-overlay-test--shown) '("$a$" "$b$")))))
+
 (defun typst-overlay-test--preview ()
   "Describe the preview: its placement and the equation in its image.
 Placement is \"beside\" or \"below\", or the result is nil if there is

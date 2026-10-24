@@ -2029,7 +2029,11 @@ named as the cache names them are touched, so nothing else in
   (typst-overlay--ensure-runtime)
   (let* ((old-snapshot (or typst-overlay--snapshot
                            (typst-overlay--empty-snapshot)))
-         (analysis (funcall typst-overlay--analyzer))
+         ;; The whole buffer, even when narrowed, or every equation
+         ;; outside the narrowing would lose its overlay.
+         (analysis (save-restriction
+                     (widen)
+                     (funcall typst-overlay--analyzer)))
          (new-snapshot (typst-overlay--make-snapshot analysis))
          (diff (typst-overlay--diff-snapshots old-snapshot new-snapshot))
          (generation (1+ (typst-overlay-registry-generation
