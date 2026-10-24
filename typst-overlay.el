@@ -87,7 +87,7 @@ compiling its share in one batch."
   :type 'string
   :group 'typst-overlay)
 
-(defcustom typst-overlay-idle-refresh-delay 0.5
+(defcustom typst-overlay-idle-refresh-delay 0.25
   "Seconds Emacs must be idle after an edit before overlays refresh.
 So equations are rendered again shortly after you stop typing.  If
 nil, they are rendered again only by `typst-overlay-refresh', for

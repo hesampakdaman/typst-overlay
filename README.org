@@ -28,7 +28,7 @@ The recommended configuration:
     ;; Optional: shown values are the defaults
     (typst-overlay-scale 1.0)
     (typst-overlay-max-active-compiles 8)
-    (typst-overlay-idle-refresh-delay 0.5)
+    (typst-overlay-idle-refresh-delay 0.25)
     :hook ((typst-ts-mode . typst-overlay-mode)
            (typst-ts-mode . flymake-mode)))
 #+end_src
@@ -58,7 +58,7 @@ All options are available via =M-x customize-group RET typst-overlay=.
 | =typst-overlay-cache-dir-name=      | =.typst-overlay-cache= | Directory name for cached SVG files  |
 | =typst-overlay-max-active-compiles= | =8=                    | Max concurrent compilation processes |
 | =typst-overlay-extra-prelude=       | =""=                   | Extra typst prelude code             |
-| =typst-overlay-idle-refresh-delay=  | =0.5=                  | Idle seconds before re-rendering     |
+| =typst-overlay-idle-refresh-delay=  | =0.25=                 | Idle seconds before re-rendering     |
 | =typst-overlay-system-fonts=        | =nil=                  | Let typst use the system's fonts     |
 | =typst-overlay-font-paths=          | =nil=                  | Extra folders to search for fonts    |
 | =typst-overlay-use-flymake=         | =org=                  | Where to report errors to Flymake    |
