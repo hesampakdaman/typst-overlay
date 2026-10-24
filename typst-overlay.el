@@ -150,6 +150,17 @@ when `typst-overlay-mode' is turned on."
                  (const :tag "Nowhere" nil))
   :group 'typst-overlay)
 
+(defface typst-overlay-equation
+  '((t :foreground reset))
+  "Face rendered equations are shown in.
+Their black is drawn in its foreground, by default that of the
+`default' face, so they follow theme changes.  Without it, they would
+take the face of the source text they cover, which a major mode may
+dim, as `typst-ts-mode' does for the $ delimiters.  It sets only the
+foreground, so equations keep the size of the text around them, as
+in org headings."
+  :group 'typst-overlay)
+
 (defface typst-overlay-error
   ;; Dotted where supported, unlike the wavy underline of Flymake.
   `((t :underline (:style ,(if (>= emacs-major-version 30) 'dots 'line)
@@ -1102,16 +1113,19 @@ stamped with GENERATION.  Return the new element, to be rendered by
    (overlays-at (point))))
 
 (defun typst-overlay--hide-overlay (overlay)
-  "Hide OVERLAY by clearing its display property."
+  "Hide OVERLAY by clearing its display property.
+Its face goes too, so the source keeps its own."
   (when (overlayp overlay)
-    (overlay-put overlay 'display nil)))
+    (overlay-put overlay 'display nil)
+    (overlay-put overlay 'face nil)))
 
 (defun typst-overlay--show-overlay (overlay)
   "Show OVERLAY again using its cached image."
   (when (overlayp overlay)
     (let ((image (overlay-get overlay 'typst-overlay-image)))
       (when image
-        (overlay-put overlay 'display image)))))
+        (overlay-put overlay 'display image)
+        (overlay-put overlay 'face 'typst-overlay-equation)))))
 
 (defun typst-overlay--eldoc (callback &rest _)
   "Document the error of the failed equation at point with CALLBACK.
@@ -1256,6 +1270,7 @@ or those cached before this was written to the SVG, are centered."
          (image (typst-overlay--create-image svg-data))
          (overlay (make-overlay beg end nil t nil)))
     (overlay-put overlay 'display image)
+    (overlay-put overlay 'face 'typst-overlay-equation)
     (overlay-put overlay 'typst-overlay t)
     (overlay-put overlay 'typst-overlay-image image)
     (overlay-put overlay 'evaporate t)

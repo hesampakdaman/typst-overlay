@@ -714,6 +714,25 @@ See `typst-overlay-test--edit-cases'."
         (should (equal (typst-overlay-test--shown) '("$a$" "$bb$" "$c$")))
         (should (= (length (seq-intersection before (overlays))) 2))))))
 
+(ert-deftest typst-overlay-test-equation-face ()
+  "Images are shown in their own face; hidden, the source keeps its own."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches "Text $a$ end." #'ignore
+    (run-compiles)
+    (let ((overlay (car (seq-filter (lambda (overlay) (overlay-get overlay 'typst-overlay))
+                                    (overlays-in (point-min) (point-max))))))
+      (goto-char (point-max))
+      (typst-overlay--post-command-update)
+      (should (eq (overlay-get overlay 'face) 'typst-overlay-equation))
+      (goto-char (point-min))
+      (search-forward "$a")
+      (typst-overlay--post-command-update)
+      (should-not (overlay-get overlay 'display))
+      (should-not (overlay-get overlay 'face))
+      (goto-char (point-max))
+      (typst-overlay--post-command-update)
+      (should (eq (overlay-get overlay 'face) 'typst-overlay-equation)))))
+
 (defun typst-overlay-test--preview ()
   "Describe the preview: its placement and the equation in its image.
 Placement is \"beside\" or \"below\", or the result is nil if there is
