@@ -377,7 +377,7 @@ Return the `user-error' message and whether the mode stayed on."
                          "#pagebreak()"))
           (should (equal (line (typst-overlay-job-lines-prelude-end second))
                          "#let k = 1"))
-          (should (equal (line (1- (typst-overlay-job-lines-end second))) "$"))
+          (should (equal (line (- (typst-overlay-job-lines-end second) 3)) "$]"))
           (should (equal (line (typst-overlay-job-lines-end second)) "]")))))))
 
 (ert-deftest typst-overlay-test-failed-jobs ()
@@ -448,7 +448,7 @@ MESSAGE is the error it reports there."
 (defun typst-overlay-test--source-equations (source)
   "Return the equation texts in batch SOURCE, one per page, in order."
   (let ((start 0) equations)
-    (while (string-match "^#counter(math.equation).update(0)\n\\(\\(?:.\\|\n\\)*?\\)\n]$"
+    (while (string-match "^#let typst-overlay-math = \\[\\(\\(?:.\\|\n\\)*?\\)]\n#typst-overlay-math$"
                          source start)
       (push (match-string 1 source) equations)
       (setq start (match-end 0)))
@@ -956,10 +956,12 @@ This holds whether Eglot starts before or after the mode."
                           (typst-overlay--make-element node nil))))
          (typst-overlay-extra-prelude ""))
     (should (equal (funcall key)
-                   (md5 (concat (md5 "$x$") (md5 "") (md5 "")))))
+                   (md5 (concat (md5 "$x$") (md5 "") (md5 "")
+                                typst-overlay--render-version))))
     (let ((typst-overlay-system-fonts t))
       (should-not (equal (funcall key)
-                         (md5 (concat (md5 "$x$") (md5 "") (md5 ""))))))))
+                         (md5 (concat (md5 "$x$") (md5 "") (md5 "")
+                                      typst-overlay--render-version)))))))
 
 (ert-deftest typst-overlay-test-unknown-font-warning ()
   "A font typst could not find is warned about once, unless system fonts are on."
@@ -1004,6 +1006,26 @@ EXPECTED is the size property the image is created with.")
                                                  (cdr height))))
                          (list :scale (plist-get props :scale)))))
           (should (equal (list name expected) (list name actual))))))))
+
+;;; Baseline
+
+(defconst typst-overlay-test--ascent-cases
+  '(("no descender: almost all above the baseline"
+     "<a href=\"typst-overlay-depth:0.121\"/>" 6.983 84)
+    ("descender" "<a href=\"typst-overlay-depth:2.255\"/>" 9.117 64)
+    ("rounding error below zero" "<a href=\"typst-overlay-depth:-1e-16\"/>" 7.0 86)
+    ("display equation: no depth" "<g/>" 24.11 center)
+    ("depth deeper than the image is clamped"
+     "<a href=\"typst-overlay-depth:50\"/>" 10.0 0))
+  "Ascent cases: (NAME SVG HEIGHT EXPECTED).
+HEIGHT is the image's height in points, including its 1pt margins.")
+
+(ert-deftest typst-overlay-test-image-ascent ()
+  "Inline equations sit on the baseline; others are centered."
+  (dolist (case typst-overlay-test--ascent-cases)
+    (pcase-let ((`(,name ,svg ,height ,expected) case))
+      (should (equal (list name expected)
+                     (list name (typst-overlay--image-ascent svg height)))))))
 
 (provide 'typst-overlay-test)
 

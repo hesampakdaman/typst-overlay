@@ -555,10 +555,15 @@ that prose like \"$5 and $10\" is left alone."
   prelude-hash
   cache-key)
 
+(defconst typst-overlay--render-version "2"
+  "Version of how equations are compiled, part of every cache key.
+Changing it renders cached equations again, for changes that make
+their images differ, such as writing their depth to the SVG.")
+
 (defun typst-overlay--make-element (math-node prelude-code-nodes &optional preludes)
   "Build an element from MATH-NODE and PRELUDE-CODE-NODES.
-The cache key also covers `typst-overlay-extra-prelude' and the fonts
-typst may use.
+The cache key also covers `typst-overlay-extra-prelude', the fonts
+typst may use and `typst-overlay--render-version'.
 
 PRELUDES, if non-nil, is a hash table from `typst-overlay--prelude-table'
 that keeps each prelude's text and hash, so a prelude shared by many
@@ -568,6 +573,7 @@ math nodes is built and hashed once."
                 (typst-overlay--prelude prelude-code-nodes preludes))
                (cache-key (md5 (concat text-hash prelude-hash
                                        (md5 typst-overlay-extra-prelude)
+                                       typst-overlay--render-version
                                        ;; Only when changed, so images cached
                                        ;; before these options stay valid.
                                        (and (or typst-overlay-system-fonts
@@ -1212,18 +1218,37 @@ shown in, so equations follow theme changes without being reread."
 (defconst typst-overlay--typst-font-size 11.0
   "Typst's default text size in points, which equations are compiled at.")
 
+(defconst typst-overlay--page-margin 1.0
+  "Margin around each equation's image, in points.
+As set in `typst-overlay--source-header'.")
+
 (defun typst-overlay--create-image (svg-data)
   "Return an image of SVG-DATA sized relative to the surrounding text.
 Its height is given in ems, so it follows the font where it is shown,
 including `text-scale-adjust'.  SVG-DATA without a height in points
-falls back to a fixed `typst-overlay-scale'."
+falls back to a fixed `typst-overlay-scale'.  It is aligned as
+`typst-overlay--image-ascent' says."
   (if (string-match "<svg[^>]* height=\"\\([0-9.]+\\)pt\"" svg-data)
-      (create-image svg-data 'svg t :ascent 'center
-                    :height (cons (* typst-overlay-scale
-                                     (/ (string-to-number (match-string 1 svg-data))
-                                        typst-overlay--typst-font-size))
-                                  'em))
+      (let ((height (string-to-number (match-string 1 svg-data))))
+        (create-image svg-data 'svg t
+                      :ascent (typst-overlay--image-ascent svg-data height)
+                      :height (cons (* typst-overlay-scale
+                                       (/ height typst-overlay--typst-font-size))
+                                    'em)))
     (create-image svg-data 'svg t :ascent 'center :scale typst-overlay-scale)))
+
+(defun typst-overlay--image-ascent (svg-data height)
+  "Return the `:ascent' of an image of SVG-DATA, HEIGHT points high.
+An inline equation sits on the baseline of the text around it: its
+SVG says how far it reaches below the baseline, so the percentage of
+the image above it is known.  Other images, such as display equations
+or those cached before this was written to the SVG, are centered."
+  (if (and (> height 0)
+           (string-match "href=\"typst-overlay-depth:\\([-0-9.e]+\\)\"" svg-data))
+      (let ((depth (+ (string-to-number (match-string 1 svg-data))
+                      typst-overlay--page-margin)))
+        (max 0 (min 100 (round (* 100 (/ (- height depth) height))))))
+    'center))
 
 (defun typst-overlay--place-overlay-from-svg (beg end svg-path)
   "Create and return an overlay from BEG to END displaying SVG-PATH."
@@ -1278,7 +1303,17 @@ falls back to a fixed `typst-overlay-scale'."
 (defconst typst-overlay--source-header
   (concat "#set page(width: auto, height: auto, margin: 1pt, fill: none)\n"
           "#set text(top-edge: \"bounds\", bottom-edge: \"bounds\")\n"
-          "#set text(fill: rgb(\"#000000\"))\n")
+          "#set text(fill: rgb(\"#000000\"))\n"
+          ;; How far an inline equation reaches below the baseline,
+          ;; written to the SVG as a link on an empty box, which is
+          ;; not drawn.  See `typst-overlay--image-ascent'.
+          "#let typst-overlay-depth(body) = context {\n"
+          "  if body.func() == math.equation and not body.block {\n"
+          "    let depth = (measure(body).height\n"
+          "      - measure(text(bottom-edge: \"baseline\", body)).height)\n"
+          "    place(link(\"typst-overlay-depth:\" + str(depth.pt()), box()))\n"
+          "  }\n"
+          "}\n")
   "Typst source that starts every batch.")
 
 (cl-defstruct typst-overlay-job
@@ -1306,8 +1341,12 @@ a newline.  PRELUDE-LINES is how many lines its prelude takes."
                   prelude
                   ;; Number each equation as if compiled on its own.
                   "#counter(math.equation).update(0)\n"
-                  (typst-overlay-element-text element)
-                  "\n]\n")
+                  ;; On the same lines as the equation, so line
+                  ;; numbers in its errors still point at it.
+                  "#let typst-overlay-math = [" (typst-overlay-element-text element) "]\n"
+                  "#typst-overlay-math\n"
+                  "#typst-overlay-depth(typst-overlay-math)\n"
+                  "]\n")
           (cl-count ?\n prelude))))
 
 (defun typst-overlay--batch-source (jobs)
