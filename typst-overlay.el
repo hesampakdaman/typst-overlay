@@ -590,17 +590,21 @@ their images differ, such as writing their depth to the SVG.")
 
 (defun typst-overlay--make-element (math-node prelude-code-nodes &optional preludes)
   "Build an element from MATH-NODE and PRELUDE-CODE-NODES.
-The cache key also covers `typst-overlay-extra-prelude', the fonts
-typst may use and `typst-overlay--render-version'.
+The cache key also covers `typst-overlay-extra-prelude' and the files
+it imports, the fonts typst may use and `typst-overlay--render-version'.
 
 PRELUDES, if non-nil, is a hash table from `typst-overlay--prelude-table'
 that keeps each prelude's text and hash, so a prelude shared by many
 math nodes is built and hashed once."
-  (pcase-let* ((text-hash (typst-overlay-math-node-text-hash math-node))
+  (pcase-let* ((preludes (or preludes (typst-overlay--prelude-table)))
+               (text-hash (typst-overlay-math-node-text-hash math-node))
                (`(,prelude-text . ,prelude-hash)
                 (typst-overlay--prelude prelude-code-nodes preludes))
                (cache-key (md5 (concat text-hash prelude-hash
-                                       (md5 typst-overlay-extra-prelude)
+                                       (md5 (concat typst-overlay-extra-prelude
+                                                    (typst-overlay--imports-hash
+                                                     typst-overlay-extra-prelude
+                                                     preludes)))
                                        typst-overlay--render-version
                                        ;; Only when changed, so images cached
                                        ;; before these options stay valid.
@@ -618,20 +622,70 @@ math nodes is built and hashed once."
      :cache-key cache-key)))
 
 (defun typst-overlay--prelude-table ()
-  "Return an empty table for `typst-overlay--prelude'."
+  "Return an empty table for `typst-overlay--prelude'.
+It also keeps the hashes of the files the preludes import, by their
+path, so each is read once."
   (make-hash-table :test #'equal))
 
 (defun typst-overlay--prelude (code-nodes preludes)
   "Return (TEXT . HASH) of the prelude made of CODE-NODES.
-PRELUDES, if non-nil, is a table from `typst-overlay--prelude-table'
-to look it up in, or store it in."
-  (let ((key (and preludes (mapcar #'typst-overlay-code-node-beg code-nodes))))
-    (or (and preludes (gethash key preludes))
-        (let* ((text (typst-overlay--build-prelude-text code-nodes))
-               (prelude (cons text (md5 text))))
-          (when preludes
-            (puthash key prelude preludes))
-          prelude))))
+PRELUDES is a table from `typst-overlay--prelude-table' to look it
+up in, or store it in.  HASH also covers the files TEXT imports, so
+equations are rendered again when one of them changes."
+  (let ((key (mapcar #'typst-overlay-code-node-beg code-nodes)))
+    (or (gethash key preludes)
+        (let ((text (typst-overlay--build-prelude-text code-nodes)))
+          (puthash key
+                   (cons text (md5 (concat text (typst-overlay--imports-hash
+                                                 text preludes))))
+                   preludes)))))
+
+(defconst typst-overlay--import-regexp
+  "^[ \t]*#\\(?:import\\|include\\)[ \t]+\"\\([^\"]*\\)\""
+  "Regexp matching a top-level #import or #include of a file.
+Its first group is the path, as written.")
+
+(defun typst-overlay--imports-hash (text files)
+  "Return a hash of the files TEXT imports or includes, or \"\" if none.
+Those are the files its #import and #include lines name, not the files
+they import in turn, nor packages.  Relative paths are from the
+buffer's folder, absolute ones from its project's root.  FILES is a
+table from `typst-overlay--prelude-table' keeping each file's hash."
+  (let ((start 0) hashes)
+    (while (string-match typst-overlay--import-regexp text start)
+      (setq start (match-end 0))
+      (let ((path (match-string 1 text)))
+        (unless (string-prefix-p "@" path)
+          (let ((file (if (string-prefix-p "/" path)
+                          (expand-file-name
+                           (substring path 1)
+                           (or (gethash :root files)
+                               (puthash :root (typst-overlay--project-root
+                                               (typst-overlay--buffer-dir))
+                                        files)))
+                        (expand-file-name path (typst-overlay--buffer-dir)))))
+            (push (or (gethash file files)
+                      (puthash file (typst-overlay--file-hash file) files))
+                  hashes)))))
+    (if hashes
+        (md5 (apply #'concat (nreverse hashes)))
+      "")))
+
+(defun typst-overlay--file-hash (file)
+  "Return a hash of FILE's contents, or \"none\" if it cannot be read."
+  (if (and (file-regular-p file) (file-readable-p file))
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (insert-file-contents-literally file)
+        (md5 (current-buffer)))
+    "none"))
+
+(defun typst-overlay--buffer-dir ()
+  "Return the folder of the buffer's file, or for buffers without one, its own.
+Relative #import paths are from there."
+  (expand-file-name (if buffer-file-name
+                        (file-name-directory buffer-file-name)
+                      default-directory)))
 
 (defun typst-overlay--build-prelude-text (code-nodes)
   "Return the full prelude source for CODE-NODES."
@@ -1443,11 +1497,11 @@ left alone, as are those outside ROOT, which typst then reports."
     (with-temp-buffer
       (insert prelude)
       (goto-char (point-min))
-      (while (re-search-forward
-              "^[ \t]*#\\(?:import\\|include\\)[ \t]+\"\\([^\"/@][^\"]*\\)\""
-              nil t)
-        (let ((path (expand-file-name (match-string 1) dir)))
-          (when (string-prefix-p root path)
+      (while (re-search-forward typst-overlay--import-regexp nil t)
+        (let* ((written (match-string 1))
+               (path (save-match-data (expand-file-name written dir))))
+          (when (and (not (string-match-p "\\`[/@]" written))
+                     (string-prefix-p root path))
             (replace-match (concat "/" (file-relative-name path root)) t t nil 1))))
       (buffer-string))))
 
@@ -1555,9 +1609,7 @@ ARTIFACT-CACHE receives the results.  SESSION is the
   (let* (;; #import paths are relative to the buffer's file, or for
          ;; buffers without one, its directory.
          (file-dir (with-current-buffer buffer
-                     (expand-file-name (if buffer-file-name
-                                           (file-name-directory buffer-file-name)
-                                         default-directory))))
+                     (typst-overlay--buffer-dir)))
          (root (typst-overlay--project-root file-dir))
          (source (typst-overlay--batch-source jobs file-dir root))
          (cache-dir (file-name-directory

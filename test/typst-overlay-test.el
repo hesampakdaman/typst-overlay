@@ -633,6 +633,55 @@ and `compiled' the equations compiled, in order."
       (should (equal batches '(2 2 1 1 1 1)))
       (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 4)))))
 
+(ert-deftest typst-overlay-test-imported-file-changed ()
+  "Equations are compiled again when a file they import changes."
+  (skip-unless (treesit-language-available-p 'typst))
+  (let ((typst-overlay-extra-prelude "#import \"defs.typ\": *"))
+    (typst-overlay-test--with-batches "Text $a$ end." #'ignore
+      (write-region "#let a = 1" nil (expand-file-name "defs.typ" dir))
+      (typst-overlay-refresh)
+      (run-compiles)
+      (setq compiled nil)
+      ;; Unchanged, nothing is compiled.
+      (typst-overlay-refresh)
+      (run-compiles)
+      (should-not compiled)
+      (write-region "#let a = 2" nil (expand-file-name "defs.typ" dir))
+      (typst-overlay-refresh)
+      (run-compiles)
+      (should (equal compiled '("$a$"))))))
+
+(ert-deftest typst-overlay-test-imports-hash ()
+  "The prelude hash covers the files it imports, from the file or the root."
+  (let* ((root (file-name-as-directory (make-temp-file "typst-overlay-test-" t)))
+         (sub (expand-file-name "sub/" root))
+         (project-vc-extra-root-markers '(".typst-overlay-test-root")))
+    (unwind-protect
+        (with-temp-buffer
+          (make-directory sub)
+          (write-region "" nil (expand-file-name ".typst-overlay-test-root" root))
+          (setq buffer-file-name (expand-file-name "main.typ" sub))
+          (cl-flet ((hash (text)
+                      (cdr (typst-overlay--prelude
+                            (list (make-typst-overlay-code-node :beg 1 :text text))
+                            (typst-overlay--prelude-table))))
+                    (write (file text)
+                      (write-region text nil (expand-file-name file root))))
+            (dolist (text '("#import \"defs.typ\": f" "#include \"/top.typ\""))
+              (write "sub/defs.typ" "1")
+              (write "top.typ" "1")
+              (let ((before (hash text)))
+                (should (equal (hash text) before))
+                (write (if (string-search "defs" text) "sub/defs.typ" "top.typ") "2")
+                (should-not (equal (hash text) before))))
+            ;; Packages are not read.
+            (should (equal (typst-overlay--imports-hash
+                            "#import \"@preview/physica:0.9.5\": *"
+                            (typst-overlay--prelude-table))
+                           "")))
+          (set-buffer-modified-p nil))
+      (delete-directory root t))))
+
 (ert-deftest typst-overlay-test-batch-after-teardown ()
   "Batches finishing after the mode is turned off change nothing."
   (skip-unless (treesit-language-available-p 'typst))
