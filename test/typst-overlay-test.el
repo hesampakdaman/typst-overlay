@@ -528,7 +528,9 @@ and `compiled' the equations compiled, in order."
          (compiled nil)
          (behavior ,behavior))
      (unwind-protect
-         (cl-letf (((symbol-function 'executable-find)
+         (cl-letf (((symbol-value 'typst-overlay-cache-directory)
+                    (expand-file-name "cache/" dir))
+                   ((symbol-function 'executable-find)
                     (lambda (&rest _) "/usr/bin/typst"))
                    ;; CI's Emacs may lack SVG support; no real image is needed.
                    ((symbol-function 'image-type-available-p)
@@ -1027,19 +1029,40 @@ This holds whether Eglot starts before or after the mode."
         (should-not (memq #'typst-overlay--add-flymake-backend
                           eglot-managed-mode-hook)))))))
 
-(ert-deftest typst-overlay-test-no-file ()
-  "Buffers without a file, such as org-capture's, cache in the temporary directory."
+(ert-deftest typst-overlay-test-cache-dir ()
+  "Images are kept in a folder per file folder, in the cache directory."
   (skip-unless (treesit-language-available-p 'typst))
   (typst-overlay-test--with-batches "Text $x$." #'ignore
-    (let ((temporary-file-directory (file-name-as-directory
-                                     (expand-file-name "tmp" dir))))
-      (make-directory temporary-file-directory)
+    (run-compiles)
+    ;; Nothing is written next to the file.
+    (should (equal (directory-files dir nil "\\`[^.]") '("cache")))
+    (should (equal (sort (mapcar #'file-name-nondirectory
+                                 (directory-files-recursively typst-overlay-cache-directory
+                                                              "" t))
+                         #'string<)
+                   (list (replace-regexp-in-string "/" "!" (file-name-as-directory dir))
+                         (concat (typst-overlay-element-cache-key
+                                  (typst-overlay-record-element
+                                   (car (hash-table-values (typst-overlay-registry-records
+                                                            typst-overlay--registry)))))
+                                 ".svg"))))
+    ;; Buffers without a file, such as org-capture's, by their folder.
+    (let ((default-directory (file-name-as-directory (expand-file-name "tmp" dir))))
+      (make-directory default-directory)
       (typst-overlay-mode -1)
       (setq buffer-file-name nil)
       (typst-overlay-mode 1)
       (run-compiles)
       (should (equal (typst-overlay-test--shown) '("$x$")))
-      (should (directory-files-recursively temporary-file-directory "\\.svg\\'")))))
+      (should (file-directory-p (typst-overlay--cache-dir)))
+      (should (string-suffix-p "!tmp!" (typst-overlay--cache-dir))))
+    ;; A ! in the path is written !!; a path too long is hashed.
+    (let ((buffer-file-name "/a!b/c.typ"))
+      (should (equal (typst-overlay--cache-dir)
+                     (expand-file-name "!a!!b!" typst-overlay-cache-directory))))
+    (let ((buffer-file-name (concat "/" (make-string 300 ?a) "/c.typ")))
+      (should (equal (file-name-nondirectory (typst-overlay--cache-dir))
+                     (md5 (concat "/" (make-string 300 ?a) "/")))))))
 
 (ert-deftest typst-overlay-test-eldoc-org ()
   "ElDoc is turned on in org buffers, which have no ElDoc function."

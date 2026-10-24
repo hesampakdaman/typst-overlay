@@ -40,7 +40,9 @@ Enable the minor mode with =M-x typst-overlay-mode=, or with a hook as above, an
 While point is inside an equation you see its source, and its image is shown beside it in a thin box (face =typst-overlay-preview=), or below it if the equation spans lines. The image keeps up as you type, and goes away when point leaves the equation. Set =typst-overlay-preview= to =nil= to turn it off.
 
 ** Cache
-Rendered equations are saved as SVG files in a =.typst-overlay-cache= directory next to the file, so reopening it shows them without compiling again. Buffers without a file, such as those of =org-capture=, use one in the temporary directory instead. Old SVG files are not removed; the directory is safe to delete at any time, and equations are compiled again as needed. You may want to add it to your =.gitignore=.
+Rendered equations are saved as SVG files in =typst-overlay-cache-directory=, by default =~/.cache/typst-overlay/=, so reopening a file shows them without compiling again. Nothing is written next to your files. Each folder of files gets its own folder there, named after its path as for backup files: =/home/me/notes/= becomes =!home!me!notes!=. Buffers without a file, such as those of =org-capture=, use their own folder's. Old SVG files are not removed; the directory, or a folder in it, is safe to delete at any time, and equations are compiled again as needed.
+
+Before version 0.7.0 they were saved in a =.typst-overlay-cache= directory next to each file. Those directories are no longer used and can be deleted.
 
 ** Flymake
 In org buffers, turn on =flymake-mode= alongside =typst-overlay-mode= and equations that fail to compile are reported to Flymake: listed by =flymake-show-buffer-diagnostics= and visited with =flymake-goto-next-error=. No language server checks math in org buffers, so typst-overlay is the only source of these errors there.
@@ -53,19 +55,19 @@ Errors are those of the last refresh, so they update when overlays are refreshed
 
 ** Configuration
 All options are available via =M-x customize-group RET typst-overlay=.
-|-------------------------------------+------------------------+--------------------------------------|
-| Variable                            | Default                | Description                          |
-|-------------------------------------+------------------------+--------------------------------------|
-| =typst-overlay-scale=               | =1.0=                  | Equation size relative to the text   |
-| =typst-overlay-cache-dir-name=      | =.typst-overlay-cache= | Directory name for cached SVG files  |
-| =typst-overlay-max-active-compiles= | =8=                    | Max concurrent compilation processes |
-| =typst-overlay-extra-prelude=       | =""=                   | Extra typst prelude code             |
-| =typst-overlay-idle-refresh-delay=  | =0.25=                 | Idle seconds before re-rendering     |
-| =typst-overlay-preview=             | =t=                    | Show the edited equation beside it   |
-| =typst-overlay-system-fonts=        | =nil=                  | Let typst use the system's fonts     |
-| =typst-overlay-font-paths=          | =nil=                  | Extra folders to search for fonts    |
-| =typst-overlay-use-flymake=         | =org=                  | Where to report errors to Flymake    |
-|-------------------------------------+------------------------+--------------------------------------|
+|-------------------------------------+---------------------------+--------------------------------------|
+| Variable                            | Default                   | Description                          |
+|-------------------------------------+---------------------------+--------------------------------------|
+| =typst-overlay-scale=               | =1.0=                     | Equation size relative to the text   |
+| =typst-overlay-cache-directory=     | =~/.cache/typst-overlay/= | Directory for cached SVG files       |
+| =typst-overlay-max-active-compiles= | =8=                       | Max concurrent compilation processes |
+| =typst-overlay-extra-prelude=       | =""=                      | Extra typst prelude code             |
+| =typst-overlay-idle-refresh-delay=  | =0.25=                    | Idle seconds before re-rendering     |
+| =typst-overlay-preview=             | =t=                       | Show the edited equation beside it   |
+| =typst-overlay-system-fonts=        | =nil=                     | Let typst use the system's fonts     |
+| =typst-overlay-font-paths=          | =nil=                     | Extra folders to search for fonts    |
+| =typst-overlay-use-flymake=         | =org=                     | Where to report errors to Flymake    |
+|-------------------------------------+---------------------------+--------------------------------------|
 
 ** Fonts
 Typst draws math in the fonts it comes with, and by default it does not look for the fonts installed on the system. Looking through them can take most of a second every time typst starts, which is far longer than compiling the equations. If a prelude sets a font of your own, such as =#show math.equation: set text(font: "Fira Math")=, add the folder that holds it to =typst-overlay-font-paths=, or set =typst-overlay-system-fonts= to =t=. A font typst cannot find is reported in the =*Warnings*= buffer.
