@@ -105,6 +105,8 @@ The case name is part of the compared value so failures show it."
     ("after code" "#let v = 2\n#box[text]\n$u$" ("$u$"))
     ("before parse error" "Before $p$.\n#let broken = (\nAfter $q$." ("$p$"))
     ("nested math (#6)" "a $#table($x$)$ b" ("$#table($x$)$"))
+    ("content passed to a function" "#enum(enum.item[$x$])" ("$x$"))
+    ("content bound by #let" "#let c = [$c$]" ("$c$"))
     ;; Broken equations are kept and the rest continues
     ("broken equation among sections"
      "= Intro\n\nFirst $a$ and $b^2$.\n\n= Methods\n\nBroken $frac(1, 2$ here.\n\nThen $c$.\n\n= Results\n\n$ sum_(i=1)^n i $\n"
@@ -136,7 +138,13 @@ The case name is part of the compared value so failures show it."
     ;; Not detected
     ("bound in #let" "#let f = $a$" ())
     ("inside code expression" "#box[#let k = 1 and $z$]" ())
-    ("after parse error" "#let h = (\n$e$" ()))
+    ("after parse error" "#let h = (\n$e$" ())
+    ("in a function" "#enum(numbering: n => [$d_#n$])" ())
+    ("in a function defined with #let" "#let f(x) = [$x^2$]" ())
+    ("in a function's code block" "#let f(y) = { [$y$] }" ())
+    ("in a show rule's function" "#show heading: it => [$h$ #it]" ())
+    ("in a for loop" "#for i in range(3) [$i$]" ())
+    ("in a while loop" "#while false [$w$]" ()))
   "Typst cases: (NAME INPUT EXPECTED).")
 
 (ert-deftest typst-overlay-test-typst-detection ()

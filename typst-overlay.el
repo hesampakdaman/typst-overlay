@@ -284,6 +284,12 @@ For each math node, we walk up its parent chain:
 
 This effectively selects math expressions that belong to the document
 body rather than programmatic code.
+
+Math in the body of a function or loop is excluded too, wherever it
+is, as in `n => [$d_#n$]' or `#for i in xs [$i$]': its variables only
+have values when the function is called, so it cannot be rendered on
+its own.  See `typst-overlay--binder-p'.
+
 Math nodes that appear after a parse error in the document are excluded."
   (let (result)
     (dolist (cap (seq-filter (lambda (cap) (eq (car cap) 'math)) captures))
@@ -304,9 +310,19 @@ Math nodes that appear after a parse error in the document are excluded."
                (setq include nil)
                (setq done t)))
             (setq parent (treesit-node-parent parent)))
-          (when (or include (not done))
+          (when (and (or include (not done))
+                     (not (treesit-parent-until node #'typst-overlay--binder-p)))
             (push (typst-overlay--make-math-node node) result)))))
     (nreverse result)))
+
+(defun typst-overlay--binder-p (node)
+  "Return non-nil if NODE binds variables for the code in its body.
+That is a function, written as `x => ...' or `#let f(x) = ...', or a
+`for' or `while' loop."
+  (pcase (treesit-node-type node)
+    ((or "lambda" "for" "while") t)
+    ("let" (let ((pattern (treesit-node-child-by-field-name node "pattern")))
+             (and pattern (equal (treesit-node-type pattern) "call"))))))
 
 (defun typst-overlay--sort-math-nodes (nodes)
   "Sort math NODES by buffer position."
