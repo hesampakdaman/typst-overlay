@@ -535,21 +535,25 @@ that prose like \"$5 and $10\" is left alone."
   prelude-hash
   cache-key)
 
-(defun typst-overlay--make-element (math-node prelude-code-nodes)
+(defun typst-overlay--make-element (math-node prelude-code-nodes &optional preludes)
   "Build an element from MATH-NODE and PRELUDE-CODE-NODES.
 The cache key also covers `typst-overlay-extra-prelude' and the fonts
-typst may use."
-  (let* ((text-hash (typst-overlay-math-node-text-hash math-node))
-         (prelude-text (typst-overlay--build-prelude-text prelude-code-nodes))
-         (prelude-hash (md5 prelude-text))
-         (cache-key (md5 (concat text-hash prelude-hash
-                                 (md5 typst-overlay-extra-prelude)
-                                 ;; Only when changed, so images cached
-                                 ;; before these options stay valid.
-                                 (and (or typst-overlay-system-fonts
-                                          typst-overlay-font-paths)
-                                      (md5 (string-join (typst-overlay--font-args)
-                                                        "\0")))))))
+typst may use.
+
+PRELUDES, if non-nil, is a hash table from `typst-overlay--prelude-table'
+that keeps each prelude's text and hash, so a prelude shared by many
+math nodes is built and hashed once."
+  (pcase-let* ((text-hash (typst-overlay-math-node-text-hash math-node))
+               (`(,prelude-text . ,prelude-hash)
+                (typst-overlay--prelude prelude-code-nodes preludes))
+               (cache-key (md5 (concat text-hash prelude-hash
+                                       (md5 typst-overlay-extra-prelude)
+                                       ;; Only when changed, so images cached
+                                       ;; before these options stay valid.
+                                       (and (or typst-overlay-system-fonts
+                                                typst-overlay-font-paths)
+                                            (md5 (string-join (typst-overlay--font-args)
+                                                              "\0")))))))
     (make-typst-overlay-element
      :beg (typst-overlay-math-node-beg math-node)
      :end (typst-overlay-math-node-end math-node)
@@ -558,6 +562,22 @@ typst may use."
      :prelude-text prelude-text
      :prelude-hash prelude-hash
      :cache-key cache-key)))
+
+(defun typst-overlay--prelude-table ()
+  "Return an empty table for `typst-overlay--prelude'."
+  (make-hash-table :test #'equal))
+
+(defun typst-overlay--prelude (code-nodes preludes)
+  "Return (TEXT . HASH) of the prelude made of CODE-NODES.
+PRELUDES, if non-nil, is a table from `typst-overlay--prelude-table'
+to look it up in, or store it in."
+  (let ((key (and preludes (mapcar #'typst-overlay-code-node-beg code-nodes))))
+    (or (and preludes (gethash key preludes))
+        (let* ((text (typst-overlay--build-prelude-text code-nodes))
+               (prelude (cons text (md5 text))))
+          (when preludes
+            (puthash key prelude preludes))
+          prelude))))
 
 (defun typst-overlay--build-prelude-text (code-nodes)
   "Return the full prelude source for CODE-NODES."
@@ -600,6 +620,7 @@ Each math node becomes an element paired with its prelude code."
          ;; Once, rather than for every math node.
          (prelude-code-nodes (seq-filter #'typst-overlay--prelude-code-node-p
                                          code-nodes))
+         (preludes (typst-overlay--prelude-table))
          elements)
     (dolist (math-node math-nodes)
       (let* ((prelude-nodes
@@ -607,7 +628,7 @@ Each math node becomes an element paired with its prelude code."
                math-node prelude-code-nodes))
              (element
               (typst-overlay--make-element
-               math-node prelude-nodes)))
+               math-node prelude-nodes preludes)))
         (push element elements)))
     (make-typst-overlay-snapshot
      :elements (nreverse elements)
@@ -1107,11 +1128,14 @@ Flymake already shows a diagnostic, which Flymake documents itself."
   "Read SVG-PATH, drawing its black in the color of the text around it.
 Emacs paints `currentColor' in the foreground of the text an image is
 shown in, so equations follow theme changes without being reread."
-  (let ((contents (with-temp-buffer
-                    (insert-file-contents svg-path)
-                    (buffer-string))))
-    (replace-regexp-in-string
-     (regexp-quote "#000000") "currentColor" contents t t)))
+  ;; As raw bytes, which is all an image needs, and much faster than
+  ;; decoding the file as text.
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally svg-path)
+    (while (search-forward "#000000" nil t)
+      (replace-match "currentColor" t t))
+    (buffer-string)))
 
 (defconst typst-overlay--typst-font-size 11.0
   "Typst's default text size in points, which equations are compiled at.")
