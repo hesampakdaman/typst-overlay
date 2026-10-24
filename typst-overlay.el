@@ -395,16 +395,19 @@ Return a `typst-overlay-analysis' with its code nodes, math nodes
 and the position of the first parse error, if any.
 
 A syntax error in one equation usually makes tree-sitter give up on
-the rest of the document.  So when the buffer has errors, it is
-parsed again with its broken equations blanked out, see
+the rest of the document, or read the rest of the document as part of
+it, see `typst-overlay--swallowed-dollar'.  So when the buffer has
+either, it is parsed again with its broken equations blanked out, see
 `typst-overlay--repair-parse'.  Those equations are still returned,
 so they are compiled and underlined with their error."
   (let* ((root (treesit-buffer-root-node))
+         (captures (typst-overlay--query-nodes root))
          (first-error (typst-overlay--first-error root))
-         (repair (and first-error (typst-overlay--repair-parse)))
+         (repair (and (or first-error (typst-overlay--first-swallowed captures))
+                      (typst-overlay--repair-parse)))
          (root (if repair (car repair) root))
-         (first-error (if repair (typst-overlay--first-error root) first-error))
-         (captures (typst-overlay--query-nodes root)))
+         (captures (if repair (typst-overlay--query-nodes root) captures))
+         (first-error (if repair (typst-overlay--first-error root) first-error)))
     (make-typst-overlay-analysis
      :code-nodes (typst-overlay--sort-code-nodes
                   (typst-overlay--collect-code-nodes captures))
@@ -430,9 +433,10 @@ Return (ROOT . BROKEN): ROOT is the root node of the repaired copy,
 whose positions match the buffer, and BROKEN the (BEG . END) spans
 of the equations that were blanked out.
 
-Starting at the first parse error, the first unescaped $ that does
-not start clean math is paired with the next one, as in org buffers,
-and blanked out with spaces, keeping positions.  Dollar signs in
+Starting at the first parse error, or the first equation that
+swallowed a $, the first unescaped $ that does not start clean math is
+paired with the next one, as in org buffers, and blanked out with
+spaces, keeping positions.  Dollar signs in
 comments, strings and raw text are skipped; the grammar still finds
 those inside parse errors.  This repeats until the copy parses, or
 no equation is to blame, such as for an error in code."
@@ -450,7 +454,7 @@ no equation is to blame, such as for an error in code."
       (insert text)
       (let (broken span)
         (while (setq span (typst-overlay--blank-broken-math
-                           (typst-overlay--first-error
+                           (typst-overlay--first-problem
                             (treesit-buffer-root-node 'typst))))
           (push span broken))
         (cons (treesit-buffer-root-node 'typst) (nreverse broken))))))
@@ -466,6 +470,54 @@ no equation is to blame, such as for an error in code."
                                   typst-overlay--literal-node-types)))
       (setq node (treesit-node-parent node)))
     node))
+
+(defun typst-overlay--swallowed-dollar (node)
+  "Return the position of a $ math NODE swallowed, or nil.
+Typst ends math at the next unescaped $, but the tree-sitter grammar
+lets a trailing operator take it as an operand: in $E_$, the
+subscript is the closing $, and the math goes on to the next $ in the
+document.  Such math has a $ inside that is not escaped, not in a
+string, raw text or comment, and not where math nested in it starts
+or ends, as in $#table($x$)$.  NODE is in the current buffer."
+  (let ((beg (treesit-node-start node))
+        (end (treesit-node-end node)))
+    ;; Most math has no $ inside: check that first, without copying it.
+    (when (save-excursion
+            (goto-char (1+ beg))
+            (search-forward "$" (1- end) t))
+      (let ((nested (mapcan (lambda (cap)
+                              (unless (treesit-node-eq (cdr cap) node)
+                                (list (treesit-node-start (cdr cap))
+                                      (1- (treesit-node-end (cdr cap))))))
+                            (treesit-query-capture node '((math) @math)))))
+        (save-excursion
+          (goto-char (1+ beg))
+          (catch 'found
+            (while (search-forward "$" (1- end) t)
+              (let ((pos (1- (point))))
+                (unless (or (memq pos nested)
+                            (typst-overlay--escaped-p pos)
+                            (typst-overlay--literal-p pos))
+                  (throw 'found pos))))))))))
+
+(defun typst-overlay--first-swallowed (captures)
+  "Return the start of the first math in CAPTURES that swallowed a $.
+See `typst-overlay--swallowed-dollar'.  CAPTURES are those of
+`typst-overlay--query-nodes', in document order."
+  (seq-some (lambda (cap)
+              (and (eq (car cap) 'math)
+                   (typst-overlay--swallowed-dollar (cdr cap))
+                   (treesit-node-start (cdr cap))))
+            captures))
+
+(defun typst-overlay--first-problem (root)
+  "Return where the first broken equation under ROOT may start, or nil.
+That is the first parse error or the first math that swallowed a $,
+whichever comes first."
+  (let ((positions (delq nil (list (typst-overlay--first-error root)
+                                   (typst-overlay--first-swallowed
+                                    (typst-overlay--query-nodes root))))))
+    (and positions (apply #'min positions))))
 
 (defun typst-overlay--blank-broken-math (error)
   "Blank out the first broken equation from the parse ERROR, a position.
@@ -533,7 +585,8 @@ Reusing one buffer and parser is several times faster than
   "Return the end of the Typst math starting at BEG, or nil.
 The text from BEG to LIMIT is parsed with the Typst tree-sitter
 grammar, so nested math such as $#table($x$)$ is handled.  Return
-nil if no math starts at BEG or it does not parse cleanly."
+nil if no math starts at BEG, or it does not parse cleanly or swallowed
+a $, see `typst-overlay--swallowed-dollar'."
   (let ((text (buffer-substring-no-properties beg limit)))
     (with-current-buffer (typst-overlay--math-parse-buffer)
       (erase-buffer)
@@ -544,7 +597,8 @@ nil if no math starts at BEG or it does not parse cleanly."
           (setq node (treesit-node-parent node)))
         (when (and node
                    (= (treesit-node-start node) 1)
-                   (not (treesit-node-check node 'has-error)))
+                   (not (treesit-node-check node 'has-error))
+                   (not (typst-overlay--swallowed-dollar node)))
           (+ beg (1- (treesit-node-end node))))))))
 
 (defun typst-overlay--org-in-code-p (pos)

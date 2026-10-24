@@ -79,6 +79,7 @@ The case name is part of the compared value so failures show it."
     ("variable in math" "$#x$ var" ("$#x$"))
     ("unclosed outer: found up to the next $" "$#table($x$ unclosed" ("$#table($"))
     ("syntax error: unclosed parenthesis" "a $frac(1, 2$ b" ("$frac(1, 2$"))
+    ("trailing subscript swallows the closing $" "a $E_$ b $x$ c" ("$E_$" "$x$"))
     ;; Not detected
     ("escaped dollars before words" "use \\$a or \\$b" ())
     ("prices" "costs $5 and $10 total" ())
@@ -135,6 +136,16 @@ The case name is part of the compared value so failures show it."
     ("dollars in a comment are not blamed"
      "= A\n\n// see $ \"x $ here\n\nBroken $frac(1, 2$.\n\nAfter $b$.\n"
      ("$frac(1, 2$" "$b$"))
+    ;; The grammar takes the closing $ as the operand of a trailing
+    ;; operator, and the math goes on to the next $.
+    ("trailing subscript swallows the closing $"
+     "Intro $a$.\n\nBroken $E_$ here.\n\nLater $b$ and $c^2$.\n"
+     ("$a$" "$E_$" "$b$" "$c^2$"))
+    ("trailing superscript, in the same paragraph"
+     "A $E^$ b $x$ c $y$." ("$E^$" "$x$" "$y$"))
+    ("trailing fraction" "A $x/$ b $x$ c." ("$x/$" "$x$"))
+    ("dollars in a string or escaped in math are not swallowed"
+     "A $\"cost $5\"$ b $x \\$ y$ c $z$." ("$\"cost $5\"$" "$x \\$ y$" "$z$"))
     ;; Not detected
     ("bound in #let" "#let f = $a$" ())
     ("inside code expression" "#box[#let k = 1 and $z$]" ())
