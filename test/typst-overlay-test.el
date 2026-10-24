@@ -690,6 +690,46 @@ See `typst-overlay-test--edit-cases'."
         (should (equal (list name expected-compiled expected-shown)
                        (list name compiled (typst-overlay-test--shown))))))))
 
+(ert-deftest typst-overlay-test-idle-refresh ()
+  "Edits refresh the overlays once Emacs is idle, unless turned off."
+  (skip-unless (treesit-language-available-p 'typst))
+  (let ((run-with-idle-timer (symbol-function 'run-with-idle-timer))
+        timers)
+    (cl-letf (((symbol-function 'run-with-idle-timer)
+               (lambda (secs repeat fn &rest args)
+                 ;; Others, such as ElDoc, use idle timers too.
+                 (if (not (eq fn #'typst-overlay--idle-refresh))
+                     (apply run-with-idle-timer secs repeat fn args)
+                   (push (list secs fn args) timers)
+                   (timer-create)))))
+      (typst-overlay-test--with-batches "$a$ and $b$" #'ignore
+        (run-compiles)
+        (setq compiled nil)
+        ;; One refresh is scheduled for the edits typed until then.
+        (goto-char (point-min))
+        (search-forward "$b$")
+        (replace-match "$c$" t t)
+        (insert " more")
+        (should (= (length timers) 1))
+        (pcase-let ((`(,secs ,fn ,args) (car timers)))
+          (should (= secs typst-overlay-idle-refresh-delay))
+          (apply fn args))
+        (run-compiles)
+        (should (equal compiled '("$c$")))
+        (should (equal (typst-overlay-test--shown) '("$a$" "$c$")))
+        ;; Turning the mode off cancels a pending refresh.
+        (insert "x")
+        (should (= (length timers) 2))
+        (typst-overlay-mode -1)
+        (should-not typst-overlay--idle-timer)
+        (should-not (memq #'typst-overlay--schedule-refresh after-change-functions))
+        (typst-overlay-mode 1))
+      (setq timers nil)
+      (let ((typst-overlay-idle-refresh-delay nil))
+        (typst-overlay-test--with-batches "$a$" #'ignore
+          (insert "x")
+          (should-not timers))))))
+
 (ert-deftest typst-overlay-test-flymake ()
   "Failed equations are reported to Flymake, and still marked as failed."
   (skip-unless (treesit-language-available-p 'typst))

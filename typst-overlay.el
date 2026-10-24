@@ -27,8 +27,8 @@
 ;;   M-x typst-overlay-mode      enable in the current buffer
 ;;   M-x typst-overlay-refresh   re-render overlays manually
 ;;
-;; To refresh on save, add `typst-overlay-save-refresh' to
-;; `after-save-hook'.
+;; Edited equations are rendered again once you stop typing; see
+;; `typst-overlay-idle-refresh-delay'.
 ;;
 ;; Equations that fail to compile are reported to Flymake, in org
 ;; buffers by default; see `typst-overlay-use-flymake'.
@@ -85,6 +85,15 @@ compiling its share in one batch."
 (defcustom typst-overlay-extra-prelude ""
   "Extra Typst code prepended to every rendered overlay element."
   :type 'string
+  :group 'typst-overlay)
+
+(defcustom typst-overlay-idle-refresh-delay 0.5
+  "Seconds Emacs must be idle after an edit before overlays refresh.
+So equations are rendered again shortly after you stop typing.  If
+nil, they are rendered again only by `typst-overlay-refresh', for
+example on save with `typst-overlay-save-refresh'."
+  :type '(choice (const :tag "Only when refreshed by hand" nil)
+                 (number :tag "Seconds"))
   :group 'typst-overlay)
 
 (defcustom typst-overlay-system-fonts nil
@@ -1662,6 +1671,35 @@ Intended for use in `after-save-hook'."
   (when typst-overlay-mode
     (typst-overlay-refresh)))
 
+(defvar-local typst-overlay--idle-timer nil
+  "Timer of the pending idle refresh, or nil.")
+
+(defun typst-overlay--schedule-refresh (&rest _)
+  "Refresh overlays once Emacs is idle, after an edit.
+Waits `typst-overlay-idle-refresh-delay' seconds; for
+`after-change-functions'.  An idle timer counts from the last input,
+so one scheduled refresh covers the edits typed until then."
+  (when (and typst-overlay-idle-refresh-delay
+             (not typst-overlay--idle-timer))
+    (setq typst-overlay--idle-timer
+          (run-with-idle-timer typst-overlay-idle-refresh-delay nil
+                               #'typst-overlay--idle-refresh
+                               (current-buffer)))))
+
+(defun typst-overlay--idle-refresh (buffer)
+  "Refresh the overlays of BUFFER, from its idle timer."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq typst-overlay--idle-timer nil)
+      (when typst-overlay-mode
+        (typst-overlay-refresh)))))
+
+(defun typst-overlay--cancel-idle-refresh ()
+  "Cancel the pending idle refresh, if any."
+  (when typst-overlay--idle-timer
+    (cancel-timer typst-overlay--idle-timer)
+    (setq typst-overlay--idle-timer nil)))
+
 (defvar-local typst-overlay--last-point nil
   "Tracks previous point location to detect upward cursor movement into overlays.")
 
@@ -1702,6 +1740,7 @@ Intended for use in `after-save-hook'."
   (typst-overlay--ensure-runtime)
   (setq typst-overlay--last-point (point))
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
+  (add-hook 'after-change-functions #'typst-overlay--schedule-refresh nil t)
   (add-hook 'eglot-managed-mode-hook #'typst-overlay--add-flymake-backend nil t)
   (add-hook 'eldoc-documentation-functions #'typst-overlay--eldoc nil t)
   ;; Org buffers, for one, have no ElDoc function until now.
@@ -1713,6 +1752,8 @@ Intended for use in `after-save-hook'."
 (defun typst-overlay--disable ()
   "Tear down `typst-overlay-mode' in the current buffer."
   (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
+  (remove-hook 'after-change-functions #'typst-overlay--schedule-refresh t)
+  (typst-overlay--cancel-idle-refresh)
   (kill-local-variable 'typst-overlay--last-point)
   (typst-overlay--teardown)
   ;; Clear the diagnostics of the overlays just deleted.

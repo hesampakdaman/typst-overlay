@@ -28,14 +28,14 @@ The recommended configuration:
     ;; Optional: shown values are the defaults
     (typst-overlay-scale 1.0)
     (typst-overlay-max-active-compiles 8)
+    (typst-overlay-idle-refresh-delay 0.5)
     :hook ((typst-ts-mode . typst-overlay-mode)
-           (typst-ts-mode . flymake-mode)
-           (after-save . typst-overlay-save-refresh)))
+           (typst-ts-mode . flymake-mode)))
 #+end_src
 To render math in org buffers too, add =(org-mode . typst-overlay-mode)= and =(org-mode . flymake-mode)= to =:hook=.
 
 ** Usage
-Enable the minor mode with =M-x typst-overlay-mode=, or with a hook as above, and the buffer's equations are rendered. Editing an equation removes its overlay until the next refresh, which the =after-save-hook= above runs on save. To refresh by hand, run =M-x typst-overlay-refresh=.
+Enable the minor mode with =M-x typst-overlay-mode=, or with a hook as above, and the buffer's equations are rendered. Editing an equation removes its overlay, and it is rendered again once you stop typing for =typst-overlay-idle-refresh-delay= seconds. To refresh only when you ask, set that option to =nil= and run =M-x typst-overlay-refresh=, or add =typst-overlay-save-refresh= to =after-save-hook= to refresh on save.
 
 ** Cache
 Rendered equations are saved as SVG files in a =.typst-overlay-cache= directory next to the file, so reopening it shows them without compiling again. Buffers without a file, such as those of =org-capture=, use one in the temporary directory instead. Old SVG files are not removed; the directory is safe to delete at any time, and equations are compiled again as needed. You may want to add it to your =.gitignore=.
@@ -47,7 +47,7 @@ In Typst buffers this is opt-in, by setting =typst-overlay-use-flymake= to =t= a
 
 In buffers managed by Eglot, for example with =tinymist=, typst-overlay reports alongside the language server, whether Eglot starts before or after =typst-overlay-mode=. Typst stops at the first evaluation error in a document, so the language server reports those one at a time, while typst-overlay compiles each equation on its own and reports them all. An equation that both report shows up twice; with Flymake 1.4 or later (Emacs 31), typst-overlay's entry is labeled =typst-overlay=.
 
-Errors are those of the last refresh, so they update when overlays are refreshed, for example on save.
+Errors are those of the last refresh, so they update when overlays are refreshed, shortly after you stop typing.
 
 ** Configuration
 All options are available via =M-x customize-group RET typst-overlay=.
@@ -58,6 +58,7 @@ All options are available via =M-x customize-group RET typst-overlay=.
 | =typst-overlay-cache-dir-name=      | =.typst-overlay-cache= | Directory name for cached SVG files  |
 | =typst-overlay-max-active-compiles= | =8=                    | Max concurrent compilation processes |
 | =typst-overlay-extra-prelude=       | =""=                   | Extra typst prelude code             |
+| =typst-overlay-idle-refresh-delay=  | =0.5=                  | Idle seconds before re-rendering     |
 | =typst-overlay-system-fonts=        | =nil=                  | Let typst use the system's fonts     |
 | =typst-overlay-font-paths=          | =nil=                  | Extra folders to search for fonts    |
 | =typst-overlay-use-flymake=         | =org=                  | Where to report errors to Flymake    |
