@@ -817,6 +817,53 @@ This holds whether Eglot starts before or after the mode."
                        "<path fill=\"currentColor\" stroke=\"currentColor\"/><path fill=\"#ff0000\"/>"))
       (delete-file file))))
 
+;;; Fonts
+
+(defconst typst-overlay-test--font-args-cases
+  '(("default: system fonts skipped" nil nil ("--ignore-system-fonts"))
+    ("system fonts" t nil ())
+    ("font folders" nil ("/a" "/b")
+     ("--ignore-system-fonts" "--font-path" "/a" "--font-path" "/b")))
+  "Font argument cases: (NAME SYSTEM-FONTS FONT-PATHS EXPECTED).")
+
+(ert-deftest typst-overlay-test-font-args ()
+  "Typst skips the system's fonts unless asked, and searches the font folders."
+  (dolist (case typst-overlay-test--font-args-cases)
+    (pcase-let ((`(,name ,system-fonts ,font-paths ,expected) case))
+      (let ((typst-overlay-system-fonts system-fonts)
+            (typst-overlay-font-paths font-paths))
+        (should (equal (list name expected)
+                       (list name (typst-overlay--font-args))))))))
+
+(ert-deftest typst-overlay-test-font-cache-key ()
+  "Font options change the cache key, but the defaults keep earlier keys."
+  (let* ((node (make-typst-overlay-math-node :beg 1 :end 4 :text "$x$"
+                                             :text-hash (md5 "$x$")))
+         (key (lambda () (typst-overlay-element-cache-key
+                          (typst-overlay--make-element node nil))))
+         (typst-overlay-extra-prelude ""))
+    (should (equal (funcall key)
+                   (md5 (concat (md5 "$x$") (md5 "") (md5 "")))))
+    (let ((typst-overlay-system-fonts t))
+      (should-not (equal (funcall key)
+                         (md5 (concat (md5 "$x$") (md5 "") (md5 ""))))))))
+
+(ert-deftest typst-overlay-test-unknown-font-warning ()
+  "A font typst could not find is warned about once, unless system fonts are on."
+  (let ((output (concat "<stdin>:4:16: warning: unknown font family: fira math\n"
+                        "<stdin>:9:16: warning: unknown font family: fira math\n"))
+        warnings)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &rest _) (push message warnings))))
+      (let ((typst-overlay--warned-fonts nil))
+        (let ((typst-overlay-system-fonts t))
+          (typst-overlay--warn-unknown-fonts output))
+        (should-not warnings)
+        (typst-overlay--warn-unknown-fonts output)
+        (typst-overlay--warn-unknown-fonts output)
+        (should (= (length warnings) 1))
+        (should (string-search "\"fira math\"" (car warnings)))))))
+
 ;;; Image size
 
 (defconst typst-overlay-test--image-size-cases

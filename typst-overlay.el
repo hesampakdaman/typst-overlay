@@ -87,6 +87,24 @@ compiling its share in one batch."
   :type 'string
   :group 'typst-overlay)
 
+(defcustom typst-overlay-system-fonts nil
+  "Whether typst may use the fonts installed on the system.
+If nil, it uses only the fonts it comes with, which include its
+default math and text fonts, and those in `typst-overlay-font-paths'.
+Looking through the system's fonts can take most of a second every
+time typst starts, so turn this on only if a prelude sets a font
+installed on the system, or add that font's folder to
+`typst-overlay-font-paths' instead."
+  :type 'boolean
+  :group 'typst-overlay)
+
+(defcustom typst-overlay-font-paths nil
+  "Folders where typst looks for more fonts.
+Unlike `typst-overlay-system-fonts', only these folders are searched,
+which is fast when they hold few fonts."
+  :type '(repeat directory)
+  :group 'typst-overlay)
+
 (defcustom typst-overlay-use-flymake 'org
   "Where to report equations that fail to compile to Flymake.
 If `org', in org buffers only, where no language server checks the
@@ -505,12 +523,19 @@ that prose like \"$5 and $10\" is left alone."
 
 (defun typst-overlay--make-element (math-node prelude-code-nodes)
   "Build an element from MATH-NODE and PRELUDE-CODE-NODES.
-The cache key also covers `typst-overlay-extra-prelude'."
+The cache key also covers `typst-overlay-extra-prelude' and the fonts
+typst may use."
   (let* ((text-hash (typst-overlay-math-node-text-hash math-node))
          (prelude-text (typst-overlay--build-prelude-text prelude-code-nodes))
          (prelude-hash (md5 prelude-text))
          (cache-key (md5 (concat text-hash prelude-hash
-                                 (md5 typst-overlay-extra-prelude)))))
+                                 (md5 typst-overlay-extra-prelude)
+                                 ;; Only when changed, so images cached
+                                 ;; before these options stay valid.
+                                 (and (or typst-overlay-system-fonts
+                                          typst-overlay-font-paths)
+                                      (md5 (string-join (typst-overlay--font-args)
+                                                        "\0")))))))
     (make-typst-overlay-element
      :beg (typst-overlay-math-node-beg math-node)
      :end (typst-overlay-math-node-end math-node)
@@ -1104,8 +1129,10 @@ falls back to a fixed `typst-overlay-scale'."
 
 ;; batch compile
 ;;
-;; Starting `typst' takes about a second, while compiling an equation
-;; takes a few milliseconds.  So the equations to render are compiled
+;; Starting `typst' takes a few milliseconds, or most of a second if
+;; it looks through the system's fonts (see
+;; `typst-overlay-system-fonts'), and compiling an equation takes less
+;; than a millisecond.  So the equations to render are compiled
 ;; in batches: one Typst document per batch, one page per equation,
 ;; written to one SVG per page.  Each equation sits in its own #[...]
 ;; block, so its prelude does not leak into the others.
@@ -1294,6 +1321,14 @@ ARTIFACT-CACHE receives the results.  SESSION is the
                 jobs (cdr source) dir ok output artifact-cache session)))
          (delete-directory dir t))))))
 
+(defun typst-overlay--font-args ()
+  "Return the arguments telling typst which fonts it may use.
+See `typst-overlay-system-fonts' and `typst-overlay-font-paths'."
+  (append (unless typst-overlay-system-fonts
+            '("--ignore-system-fonts"))
+          (mapcan (lambda (dir) (list "--font-path" (expand-file-name dir)))
+                  typst-overlay-font-paths)))
+
 (defun typst-overlay--compile-async (source dir callback)
   "Compile SOURCE asynchronously to one SVG per page in DIR.
 Pages are written as 1.svg, 2.svg, and so on.  CALLBACK receives
@@ -1302,9 +1337,9 @@ whether the compile succeeded and typst's output."
          (proc (make-process
                 :name "typst-overlay-compile"
                 :buffer buffer
-                :command (list "typst" "compile" "--diagnostic-format" "short"
-                               "--format" "svg"
-                               "-" (expand-file-name "{p}.svg" dir))
+                :command `("typst" "compile" "--diagnostic-format" "short"
+                           "--format" "svg" ,@(typst-overlay--font-args)
+                           "-" ,(expand-file-name "{p}.svg" dir))
                 :connection-type 'pipe
                 :noquery t
                 :sentinel
@@ -1330,6 +1365,7 @@ whose SESSION is outdated, are ignored."
       (dolist (job jobs)
         (typst-overlay--release-job job))
     (cl-decf typst-overlay--active-compiles)
+    (typst-overlay--warn-unknown-fonts output)
     (let* ((pages (typst-overlay--batch-pages dir))
            (errors (and (not ok) (typst-overlay--compile-errors output)))
            (location (car errors))
@@ -1366,6 +1402,27 @@ whose SESSION is outdated, are ignored."
              (typst-overlay--compile-error-summary output))))))
     (typst-overlay--drain-compile-queue)
     (typst-overlay--flymake-report)))
+
+(defvar typst-overlay--warned-fonts nil
+  "Fonts already warned about by `typst-overlay--warn-unknown-fonts'.")
+
+(defun typst-overlay--warn-unknown-fonts (output)
+  "Warn about each font typst OUTPUT says it could not find.
+Typst then draws the equation in its default font, which is easy to
+miss, so the warning says how to let typst find the font.  Each font
+is warned about once."
+  (unless typst-overlay-system-fonts
+    (let ((start 0))
+      (while (string-match "warning: unknown font family: \\(.*\\)$" output start)
+        (let ((font (match-string 1 output)))
+          (setq start (match-end 0))
+          (unless (member font typst-overlay--warned-fonts)
+            (push font typst-overlay--warned-fonts)
+            (display-warning
+             'typst-overlay
+             (format-message
+              "Typst did not find font \"%s\".  Add its folder to `typst-overlay-font-paths', or set `typst-overlay-system-fonts' to t"
+              font))))))))
 
 (defun typst-overlay--release-job (job)
   "Release JOB's markers."

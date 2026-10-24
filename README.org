@@ -58,8 +58,13 @@ All options are available via =M-x customize-group RET typst-overlay=.
 | =typst-overlay-cache-dir-name=      | =.typst-overlay-cache= | Directory name for cached SVG files  |
 | =typst-overlay-max-active-compiles= | =8=                    | Max concurrent compilation processes |
 | =typst-overlay-extra-prelude=       | =""=                   | Extra typst prelude code             |
+| =typst-overlay-system-fonts=        | =nil=                  | Let typst use the system's fonts     |
+| =typst-overlay-font-paths=          | =nil=                  | Extra folders to search for fonts    |
 | =typst-overlay-use-flymake=         | =org=                  | Where to report errors to Flymake    |
 |-------------------------------------+------------------------+--------------------------------------|
+
+** Fonts
+Typst draws math in the fonts it comes with, and by default it does not look for the fonts installed on the system. Looking through them can take most of a second every time typst starts, which is far longer than compiling the equations. If a prelude sets a font of your own, such as =#show math.equation: set text(font: "Fira Math")=, add the folder that holds it to =typst-overlay-font-paths=, or set =typst-overlay-system-fonts= to =t=. A font typst cannot find is reported in the =*Warnings*= buffer.
 
 ** Running tests
 #+begin_src sh
