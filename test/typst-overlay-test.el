@@ -684,6 +684,20 @@ and `compiled' the equations compiled, in order."
           (set-buffer-modified-p nil))
       (delete-directory root t))))
 
+(ert-deftest typst-overlay-test-batch-repeats ()
+  "An equation written many times is compiled once and shown everywhere."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches "$x$ and $y$, $x$ again, then $BAD$ and $x$, $BAD$."
+      (typst-overlay-test--error-at "BAD" "unknown variable: BAD")
+    ;; Editing one of them while compiling leaves the others shown.
+    (goto-char (point-min))
+    (search-forward "$x$ again")
+    (replace-match "$z$ again" t t)
+    (run-compiles)
+    (should (equal (sort (copy-sequence compiled) #'string<) '("$BAD$" "$x$" "$y$")))
+    (should (equal (typst-overlay-test--overlays 'typst-overlay) '("$x$" "$y$" "$x$")))
+    (should (equal (typst-overlay-test--overlays 'typst-overlay-error) '("$BAD$" "$BAD$")))))
+
 (ert-deftest typst-overlay-test-batch-after-teardown ()
   "Batches finishing after the mode is turned off change nothing."
   (skip-unless (treesit-language-available-p 'typst))

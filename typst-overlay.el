@@ -1440,7 +1440,7 @@ or those cached before this was written to the SVG, are centered."
   element      ;; typst-overlay-element to render
   generation   ;; generation of the refresh that started it
   svg-path     ;; where its SVG goes in the cache
-  markers)     ;; (BEG . END) markers following the equation
+  occurrences) ;; (ELEMENT . MARKERS) for each equation it renders
 
 (cl-defstruct typst-overlay-job-lines
   beg          ;; first line of the job's block
@@ -1595,24 +1595,42 @@ prelude fails every job with the same prelude."
 
 (defun typst-overlay--start-renders (elements generation artifact-cache)
   "Start async renders for ELEMENTS at GENERATION.
-They are spread evenly over at most `typst-overlay-max-active-compiles'
-batches, which run in parallel.  ARTIFACT-CACHE receives the results."
+Elements with the same cache key, such as an $x$ written many times,
+share one job, whose image is shown for all of them.  Jobs are spread
+evenly over at most `typst-overlay-max-active-compiles' batches,
+which run in parallel.  ARTIFACT-CACHE receives the results."
   (when elements
     (let* ((jobs (mapcar
-                  (lambda (element)
+                  (lambda (group)
                     (make-typst-overlay-job
-                     :element element
+                     :element (car group)
                      :generation generation
                      :svg-path (typst-overlay--artifact-svg-path
-                                (typst-overlay-element-cache-key element))
+                                (typst-overlay-element-cache-key (car group)))
                      ;; Markers follow edits made while compiling, so the
                      ;; result can be placed where the equation is by then.
-                     :markers (typst-overlay--element-markers element)))
-                  elements))
+                     :occurrences (mapcar (lambda (element)
+                                            (cons element
+                                                  (typst-overlay--element-markers element)))
+                                          group)))
+                  (typst-overlay--group-by-cache-key elements)))
            (size (ceiling (length jobs)
                           (float (max 1 typst-overlay-max-active-compiles)))))
       (dolist (batch (seq-split jobs size))
         (typst-overlay--queue-batch batch artifact-cache)))))
+
+(defun typst-overlay--group-by-cache-key (elements)
+  "Return ELEMENTS grouped by cache key, as a list of lists.
+Groups are ordered by their first element, and keep ELEMENTS' order."
+  (let ((groups (make-hash-table :test #'equal))
+        keys)
+    (dolist (element elements)
+      (let ((key (typst-overlay-element-cache-key element)))
+        (unless (gethash key groups)
+          (push key keys))
+        (push element (gethash key groups))))
+    (mapcar (lambda (key) (nreverse (gethash key groups)))
+            (nreverse keys))))
 
 (defun typst-overlay--queue-batch (jobs artifact-cache)
   "Compile JOBS as one batch, now or once a compile slot is free.
@@ -1758,24 +1776,23 @@ is warned about once."
 
 (defun typst-overlay--release-job (job)
   "Release JOB's markers."
-  (let ((markers (typst-overlay-job-markers job)))
+  (pcase-dolist (`(,_ . ,markers) (typst-overlay-job-occurrences job))
     (set-marker (car markers) nil)
     (set-marker (cdr markers) nil)))
 
 (defun typst-overlay--finish-job (job artifact-cache error)
-  "Show the result of JOB: its SVG, or ERROR if non-nil.
-ARTIFACT-CACHE receives a successful result."
-  (let* ((element (typst-overlay-job-element job))
-         (current (typst-overlay--relocate-element
-                   element (typst-overlay-job-markers job))))
-    (typst-overlay--release-job job)
-    (if error
-        (typst-overlay--handle-render-failure
-         element current (typst-overlay-job-generation job) error)
-      (typst-overlay--handle-render-success
-       element current (typst-overlay-job-generation job)
-       (typst-overlay-element-cache-key element)
-       (typst-overlay-job-svg-path job) artifact-cache))))
+  "Show the result of JOB for each of its equations: its SVG, or ERROR.
+ERROR is nil for a successful result, which ARTIFACT-CACHE receives."
+  (pcase-dolist (`(,element . ,markers) (typst-overlay-job-occurrences job))
+    (let ((current (typst-overlay--relocate-element element markers)))
+      (if error
+          (typst-overlay--handle-render-failure
+           element current (typst-overlay-job-generation job) error)
+        (typst-overlay--handle-render-success
+         element current (typst-overlay-job-generation job)
+         (typst-overlay-element-cache-key element)
+         (typst-overlay-job-svg-path job) artifact-cache))))
+  (typst-overlay--release-job job))
 
 (defun typst-overlay--element-markers (element)
   "Return markers (BEG . END) around ELEMENT that follow later edits.
