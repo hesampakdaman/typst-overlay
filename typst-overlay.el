@@ -103,8 +103,9 @@ they are never deleted."
 (defcustom typst-overlay-max-active-compiles 8
   "Maximum number of concurrent Typst compilation processes.
 Equations to render are spread evenly over this many processes, each
-compiling its share in one batch."
-  :type 'natnum
+compiling its share in one batch.  A value below 1 counts as 1."
+  :type '(restricted-sexp :tag "Processes"
+                          :match-alternatives ((lambda (n) (and (natnump n) (> n 0)))))
   :group 'typst-overlay)
 
 (defcustom typst-overlay-extra-prelude ""
@@ -1586,10 +1587,15 @@ prelude fails every job with the same prelude."
             (cons (string-to-number (file-name-base file)) file))
           (directory-files dir t "\\`[0-9]+\\.svg\\'")))
 
+(defun typst-overlay--max-active-compiles ()
+  "Return `typst-overlay-max-active-compiles', but at least 1.
+With 0, nothing would ever be compiled."
+  (max 1 typst-overlay-max-active-compiles))
+
 (defun typst-overlay--drain-compile-queue ()
   "Start queued batches until the concurrency limit is reached."
   (while (and typst-overlay--compile-queue
-              (< typst-overlay--active-compiles typst-overlay-max-active-compiles))
+              (< typst-overlay--active-compiles (typst-overlay--max-active-compiles)))
     (let ((thunk (pop typst-overlay--compile-queue)))
       (funcall thunk))))
 
@@ -1615,7 +1621,7 @@ which run in parallel.  ARTIFACT-CACHE receives the results."
                                           group)))
                   (typst-overlay--group-by-cache-key elements)))
            (size (ceiling (length jobs)
-                          (float (max 1 typst-overlay-max-active-compiles)))))
+                          (float (typst-overlay--max-active-compiles)))))
       (dolist (batch (seq-split jobs size))
         (typst-overlay--queue-batch batch artifact-cache)))))
 
@@ -1640,7 +1646,7 @@ ARTIFACT-CACHE receives the results."
          (start (lambda ()
                   (cl-incf typst-overlay--active-compiles)
                   (typst-overlay--run-batch jobs artifact-cache buffer session))))
-    (if (< typst-overlay--active-compiles typst-overlay-max-active-compiles)
+    (if (< typst-overlay--active-compiles (typst-overlay--max-active-compiles))
         (funcall start)
       (setq typst-overlay--compile-queue
             (nconc typst-overlay--compile-queue (list start))))))

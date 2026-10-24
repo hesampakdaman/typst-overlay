@@ -595,7 +595,13 @@ and `compiled' the equations compiled, in order."
       (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 20))
       (should (= typst-overlay--active-compiles 0)))
     (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
-      (should (equal batches '(1))))))
+      (should (equal batches '(1)))))
+  ;; Below 1 counts as 1, rather than compiling nothing.
+  (let ((typst-overlay-max-active-compiles 0))
+    (typst-overlay-test--with-batches (typst-overlay-test--equations 3) #'ignore
+      (should (equal batches '(3)))
+      (run-compiles)
+      (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 3)))))
 
 (ert-deftest typst-overlay-test-batch-broken-equation ()
   "A broken equation fails on its own; the rest of its batch is retried."
