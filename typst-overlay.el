@@ -105,6 +105,17 @@ is rendered again; see `typst-overlay-idle-refresh-delay'."
   :type 'boolean
   :group 'typst-overlay)
 
+(defface typst-overlay-preview
+  '((((background dark))
+     :foreground reset :box (:line-width (-1 . -1) :color "gray40"))
+    (((background light))
+     :foreground reset :box (:line-width (-1 . -1) :color "gray70"))
+    (t :foreground reset :box (:line-width (-1 . -1))))
+  "Face of the preview of the equation being edited.
+See `typst-overlay-preview'.  Its box sets the preview apart from the
+text, and its foreground is the color the equation is drawn in."
+  :group 'typst-overlay)
+
 (defcustom typst-overlay-system-fonts nil
   "Whether typst may use the fonts installed on the system.
 If nil, it uses only the fonts it comes with, which include its
@@ -1154,8 +1165,11 @@ Otherwise the preview is removed."
                                                (overlay-end active)))
                           "\n"
                         " ")
-                      (propertize " " 'display
-                                  (overlay-get active 'typst-overlay-image))))))
+                      (propertize " "
+                                  'display (append (overlay-get active 'typst-overlay-image)
+                                                   ;; Room between it and the box.
+                                                   '(:margin (4 . 2)))
+                                  'face 'typst-overlay-preview)))))
      ((and (overlayp preview)
            (overlay-buffer preview)
            (<= (overlay-start preview) (point))

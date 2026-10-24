@@ -737,6 +737,9 @@ no preview."
                 (typst-overlay--post-command-update)))
       (move "$a")
       (should (equal (typst-overlay-test--preview) '("beside" "$a$")))
+      (should (eq (get-text-property 1 'face (overlay-get typst-overlay--preview
+                                                           'after-string))
+                  'typst-overlay-preview))
       ;; Its overlay is gone while it is edited; the old image stays.
       (insert "x")
       (typst-overlay--post-command-update)
