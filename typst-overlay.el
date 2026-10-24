@@ -314,10 +314,14 @@ body rather than programmatic code.
 Math in the body of a function or loop is excluded too, wherever it
 is, as in `n => [$d_#n$]' or `#for i in xs [$i$]': its variables only
 have values when the function is called, so it cannot be rendered on
-its own.  See `typst-overlay--binder-p'.
+its own.  Those are the `binder' captures, see `typst-overlay--query-nodes'.
 
 Math nodes that appear after a parse error in the document are excluded."
-  (let (result)
+  (let ((binders (mapcar (lambda (cap)
+                           (cons (treesit-node-start (cdr cap))
+                                 (treesit-node-end (cdr cap))))
+                         (seq-filter (lambda (cap) (eq (car cap) 'binder)) captures)))
+        result)
     (dolist (cap (seq-filter (lambda (cap) (eq (car cap) 'math)) captures))
       (let* ((node (cdr cap))
              (node-beg (treesit-node-start node))
@@ -337,18 +341,14 @@ Math nodes that appear after a parse error in the document are excluded."
                (setq done t)))
             (setq parent (treesit-node-parent parent)))
           (when (and (or include (not done))
-                     (not (treesit-parent-until node #'typst-overlay--binder-p)))
+                     ;; Comparing with the few binders is much faster than
+                     ;; walking up to the root from every math node.
+                     (not (seq-some (lambda (binder)
+                                      (and (< (car binder) node-beg)
+                                           (<= (treesit-node-end node) (cdr binder))))
+                                    binders)))
             (push (typst-overlay--make-math-node node) result)))))
     (nreverse result)))
-
-(defun typst-overlay--binder-p (node)
-  "Return non-nil if NODE binds variables for the code in its body.
-That is a function, written as `x => ...' or `#let f(x) = ...', or a
-`for' or `while' loop."
-  (pcase (treesit-node-type node)
-    ((or "lambda" "for" "while") t)
-    ("let" (let ((pattern (treesit-node-child-by-field-name node "pattern")))
-             (and pattern (equal (treesit-node-type pattern) "call"))))))
 
 (defun typst-overlay--sort-math-nodes (nodes)
   "Sort math NODES by buffer position."
@@ -363,9 +363,13 @@ That is a function, written as `x => ...' or `#let f(x) = ...', or a
   first-error)
 
 (defun typst-overlay--query-nodes (root)
-  "Return the `code' and `math' nodes under ROOT, as query captures.
-Both are found in one pass, as each walks the whole tree."
-  (treesit-query-capture root '((code) @code (math) @math)))
+  "Return the `code', `math' and `binder' nodes under ROOT, as query captures.
+A binder binds variables for the code in its body: a function, written
+as `x => ...' or `#let f(x) = ...', or a `for' or `while' loop.  All
+are found in one pass, as each query walks the whole tree."
+  (treesit-query-capture root '((code) @code (math) @math
+                                (lambda) @binder (for) @binder (while) @binder
+                                (let pattern: (call)) @binder)))
 
 (defun typst-overlay--first-error (root)
   "Return the start of the first parse error under ROOT, or nil."
