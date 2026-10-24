@@ -834,9 +834,11 @@ no preview."
                           (list (buffer-substring-no-properties
                                  (flymake-diagnostic-beg diag)
                                  (flymake-diagnostic-end diag))
-                                (string-remove-prefix
-                                 "typst-overlay: "
-                                 (flymake-diagnostic-text diag))))
+                                ;; Flymake 1.4 and later add the
+                                ;; origin to the text.
+                                (if (fboundp 'flymake-diagnostic-message)
+                                    (flymake-diagnostic-message diag)
+                                  (flymake-diagnostic-text diag))))
                         (flymake-diagnostics)))
               (error-face ()
                 (overlay-get (car (typst-overlay--error-overlays)) 'face)))
