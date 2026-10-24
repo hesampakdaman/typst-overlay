@@ -39,6 +39,8 @@ Enable the minor mode with =M-x typst-overlay-mode=, or with a hook as above, an
 
 While point is inside an equation you see its source, and its image is shown beside it in a thin box (face =typst-overlay-preview=), or below it if the equation spans lines. The image keeps up as you type, and goes away when point leaves the equation. Set =typst-overlay-preview= to =nil= to turn it off.
 
+=M-x typst-overlay-version= shows the version you have, from the =Version:= header of =typst-overlay.el=, which is that of the last release.
+
 ** Cache
 Rendered equations are saved as SVG files in =typst-overlay-cache-directory=, by default =~/.cache/typst-overlay/= (=~/Library/Caches/typst-overlay/= on macOS, =%LOCALAPPDATA%\typst-overlay\= on Windows), so reopening a file shows them without compiling again. Nothing is written next to your files. Each folder of files gets its own folder there, named after its path as for backup files: =/home/me/notes/= becomes =!home!me!notes!=. Buffers without a file, such as those of =org-capture=, use their own folder's. Images not shown for =typst-overlay-cache-max-age= days, 30 by default, are deleted, checked at most once a day while Emacs is idle; set it to =nil= to keep them. The directory, or a folder in it, is also safe to delete at any time, and equations are compiled again as needed.
 

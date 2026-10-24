@@ -1196,6 +1196,14 @@ This holds whether Eglot starts before or after the mode."
         (typst-overlay--schedule-prune)
         (should (= (length timers) 2))))))
 
+(ert-deftest typst-overlay-test-version ()
+  "The version is that of the Version header."
+  (require 'lisp-mnt)
+  (let ((header (lm-version (locate-library "typst-overlay.el"))))
+    (should (string-match-p "\\`[0-9]+\\.[0-9]+\\.[0-9]+\\'" header))
+    (should (equal typst-overlay-version header))
+    (should (equal (typst-overlay-version) header))))
+
 (ert-deftest typst-overlay-test-eldoc-org ()
   "ElDoc is turned on in org buffers, which have no ElDoc function."
   (skip-unless (treesit-language-available-p 'typst))

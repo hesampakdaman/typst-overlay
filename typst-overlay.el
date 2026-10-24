@@ -54,6 +54,15 @@
 
 (defvar typst-overlay-mode)
 
+(defconst typst-overlay-version (package-get-version)
+  "Version of typst-overlay, read from its Version header when loaded.")
+
+(defun typst-overlay-version ()
+  "Show and return the version of typst-overlay."
+  (interactive)
+  (message "typst-overlay %s" typst-overlay-version)
+  typst-overlay-version)
+
 ;; customization
 (defgroup typst-overlay nil
   "Render Typst math equations as overlays."
