@@ -1068,6 +1068,82 @@ This holds whether Eglot starts before or after the mode."
     (should (equal (typst-overlay--cache-dir-name dir)
                    (md5 (concat "!" (make-string 120 ?a) "!"))))))
 
+(ert-deftest typst-overlay-test-prune-cache ()
+  "Images not used for a while are deleted, and nothing else is."
+  (let* ((typst-overlay-cache-directory
+          (file-name-as-directory (make-temp-file "typst-overlay-test-" t)))
+         (typst-overlay-cache-max-age 30)
+         (old (time-subtract nil (days-to-time 31)))
+         (key (md5 "x")))
+    (cl-flet ((make (path &optional time)
+                (let ((file (expand-file-name path typst-overlay-cache-directory)))
+                  (make-directory (file-name-directory file) t)
+                  (write-region "" nil file)
+                  (when time (set-file-times file time))))
+              (exists (path)
+                (file-exists-p (expand-file-name path typst-overlay-cache-directory))))
+      (unwind-protect
+          (progn
+            (make (concat "!a!/" key ".svg") old)
+            (make (concat "!b!/" key ".svg") old)
+            (make (concat "!b!/" (md5 "y") ".svg"))
+            (make "!c!/notes.svg" old)
+            (make (concat "other/" key ".svg") old)
+            (make-directory (expand-file-name "!empty!" typst-overlay-cache-directory))
+            (make-directory (expand-file-name "empty" typst-overlay-cache-directory))
+            (typst-overlay--prune-cache)
+            ;; Old images and the folders they leave empty are deleted.
+            (should-not (exists "!a!"))
+            (should-not (exists (concat "!b!/" key ".svg")))
+            (should-not (exists "!empty!"))
+            ;; Recent images are kept, as is anything not named as the
+            ;; cache names it.
+            (should (exists (concat "!b!/" (md5 "y") ".svg")))
+            (should (exists "!c!/notes.svg"))
+            (should (exists (concat "other/" key ".svg")))
+            (should (exists "empty"))
+            ;; Never, if turned off.
+            (make (concat "!a!/" key ".svg") old)
+            (let ((typst-overlay-cache-max-age nil))
+              (typst-overlay--prune-cache))
+            (should (exists (concat "!a!/" key ".svg"))))
+        (delete-directory typst-overlay-cache-directory t)))))
+
+(ert-deftest typst-overlay-test-mark-used ()
+  "Showing a cached image marks it used, so it is not pruned."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches "Text $x$." #'ignore
+    (run-compiles)
+    (let ((file (car (directory-files-recursively typst-overlay-cache-directory
+                                                  "\\.svg\\'")))
+          (old (time-subtract nil (days-to-time 31))))
+      (set-file-times file old)
+      (clrhash typst-overlay--used-images)
+      (typst-overlay-mode -1)
+      (typst-overlay-mode 1)
+      (should (time-less-p old (file-attribute-modification-time
+                                (file-attributes file))))
+      (typst-overlay--prune-cache)
+      (should (file-exists-p file)))))
+
+(ert-deftest typst-overlay-test-schedule-prune ()
+  "The cache is pruned at most once a day, when Emacs is idle."
+  (let ((typst-overlay--last-prune nil)
+        (typst-overlay-cache-max-age 30)
+        timers)
+    (cl-letf (((symbol-function 'run-with-idle-timer)
+               (lambda (_secs _repeat fn &rest _) (push fn timers))))
+      (typst-overlay--schedule-prune)
+      (typst-overlay--schedule-prune)
+      (should (equal timers '(typst-overlay--prune-cache)))
+      (setq typst-overlay--last-prune (time-subtract nil (days-to-time 2)))
+      (typst-overlay--schedule-prune)
+      (should (= (length timers) 2))
+      (let ((typst-overlay-cache-max-age nil)
+            (typst-overlay--last-prune nil))
+        (typst-overlay--schedule-prune)
+        (should (= (length timers) 2))))))
+
 (ert-deftest typst-overlay-test-eldoc-org ()
   "ElDoc is turned on in org buffers, which have no ElDoc function."
   (skip-unless (treesit-language-available-p 'typst))

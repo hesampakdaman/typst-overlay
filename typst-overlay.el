@@ -87,6 +87,15 @@ compiling again.  The directory is safe to delete at any time."
   :group 'typst-overlay
   :package-version '(typst-overlay . "0.7.0"))
 
+(defcustom typst-overlay-cache-max-age 30
+  "Days after which an image not shown is deleted from the cache.
+Images are checked at most once a day, while Emacs is idle.  If nil,
+they are never deleted."
+  :type '(choice (const :tag "Never" nil)
+                 (natnum :tag "Days"))
+  :group 'typst-overlay
+  :package-version '(typst-overlay . "0.7.0"))
+
 (defvar typst-overlay-cache-dir-name nil)
 (make-obsolete-variable 'typst-overlay-cache-dir-name
                         'typst-overlay-cache-directory "0.7.0")
@@ -1361,6 +1370,7 @@ or those cached before this was written to the SVG, are centered."
 
 (defun typst-overlay--place-overlay-from-svg (beg end svg-path)
   "Create and return an overlay from BEG to END displaying SVG-PATH."
+  (typst-overlay--mark-used svg-path)
   (let* ((svg-data (typst-overlay--read-svg svg-path))
          (image (typst-overlay--create-image svg-data))
          (overlay (make-overlay beg end nil t nil)))
@@ -1948,6 +1958,49 @@ within the length Windows allows."
       (make-directory cache-dir t))
     (expand-file-name (concat cache-key ".svg") cache-dir)))
 
+(defvar typst-overlay--used-images (make-hash-table :test #'equal)
+  "Cached images marked as used this session, by path.")
+
+(defun typst-overlay--mark-used (svg-path)
+  "Mark the cached image SVG-PATH as used now, once a session.
+Its modification time is set to now, so it is kept by
+`typst-overlay--prune-cache'."
+  (unless (gethash svg-path typst-overlay--used-images)
+    (puthash svg-path t typst-overlay--used-images)
+    (ignore-errors (set-file-times svg-path))))
+
+(defconst typst-overlay--cache-image-regexp "\\`[0-9a-f]\\{32\\}\\.svg\\'"
+  "Regexp matching the name of a cached image, its cache key.")
+
+(defvar typst-overlay--last-prune nil
+  "When the cache was last pruned, or nil if not yet this session.")
+
+(defun typst-overlay--schedule-prune ()
+  "Prune the cache once Emacs is idle, if not done in the last day."
+  (when (and typst-overlay-cache-max-age
+             (or (null typst-overlay--last-prune)
+                 (> (float-time (time-since typst-overlay--last-prune)) 86400)))
+    (setq typst-overlay--last-prune (current-time))
+    (run-with-idle-timer 5 nil #'typst-overlay--prune-cache)))
+
+(defun typst-overlay--prune-cache ()
+  "Delete the cached images not used in `typst-overlay-cache-max-age' days.
+Cache folders left empty are deleted too.  Only files and folders
+named as the cache names them are touched, so nothing else in
+`typst-overlay-cache-directory' is deleted, whatever it is set to."
+  (when (and typst-overlay-cache-max-age
+             (file-directory-p typst-overlay-cache-directory))
+    (let ((limit (time-subtract nil (days-to-time typst-overlay-cache-max-age))))
+      (dolist (folder (directory-files typst-overlay-cache-directory t
+                                       "\\`\\(?:!\\|[0-9a-f]\\{32\\}\\'\\)"))
+        (when (file-directory-p folder)
+          (dolist (file (directory-files folder t typst-overlay--cache-image-regexp))
+            (when (time-less-p (file-attribute-modification-time (file-attributes file))
+                               limit)
+              (ignore-errors (delete-file file))))
+          (when (directory-empty-p folder)
+            (ignore-errors (delete-directory folder))))))))
+
 (defun typst-overlay--invalidate-overlays-past-error (first-error)
   "Delete all overlays starting at or after FIRST-ERROR position."
   (when (and first-error typst-overlay--registry)
@@ -2070,6 +2123,7 @@ so one scheduled refresh covers the edits typed until then."
                   #'typst-overlay--analyze-org
                 #'typst-overlay--analyze-typst))
   (typst-overlay--ensure-runtime)
+  (typst-overlay--schedule-prune)
   (setq typst-overlay--last-point (point))
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
   (add-hook 'after-change-functions #'typst-overlay--schedule-refresh nil t)
