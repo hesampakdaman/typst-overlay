@@ -177,10 +177,11 @@ SCOPE is the tree-sitter `content' node NODE is in, if any."
      :scope (and scope (cons (treesit-node-start scope)
                              (treesit-node-end scope))))))
 
-(defun typst-overlay--collect-code-nodes (root)
-  "Collect code nodes under ROOT that sit in markup, in document order.
+(defun typst-overlay--collect-code-nodes (captures)
+  "Collect code nodes that sit in markup, in document order.
+CAPTURES are those of `typst-overlay--query-nodes'.
 
-We query all `code` nodes via tree-sitter, but this includes code
+They include every `code` node, but this includes code
 nested in other code, such as `#x' in `#let f(x) = $#x$'.  We only
 want code written directly in markup: at top level, or in a content
 block like the `[...]' of `#enum.item[...]'.
@@ -195,10 +196,8 @@ scope in Typst, so only `content` written as `[...]' counts.
 
 Remaining nodes are converted to `typst-overlay-code-node's and
 returned in document order."
-  (let* ((query '((code) @code))
-         (captures (treesit-query-capture root query))
-         result)
-    (dolist (cap captures)
+  (let (result)
+    (dolist (cap (seq-filter (lambda (cap) (eq (car cap) 'code)) captures))
       (let* ((node (cdr cap))
              (parent (treesit-node-parent node)))
         ;; Walk up the parent chain to the enclosing `code` or `[...]'.
@@ -236,12 +235,13 @@ returned in document order."
      :text text
      :text-hash (md5 text))))
 
-(defun typst-overlay--collect-math-nodes (root first-error)
+(defun typst-overlay--collect-math-nodes (captures first-error)
   "Collect math nodes that should be rendered (i.e. in content, not code).
 
-ROOT is the tree-sitter root node.  Math at or after FIRST-ERROR is skipped.
+CAPTURES are those of `typst-overlay--query-nodes'.  Math at or after
+FIRST-ERROR is skipped.
 
-We query all `math` nodes via tree-sitter.  However, math can appear
+They include every `math` node.  However, math can appear
 both in normal document content and inside `code` blocks.  We only want
 math that is part of rendered content.
 
@@ -254,10 +254,8 @@ For each math node, we walk up its parent chain:
 This effectively selects math expressions that belong to the document
 body rather than programmatic code.
 Math nodes that appear after a parse error in the document are excluded."
-  (let* ((query '((math) @math))
-         (captures (treesit-query-capture root query))
-         result)
-    (dolist (cap captures)
+  (let (result)
+    (dolist (cap (seq-filter (lambda (cap) (eq (car cap) 'math)) captures))
       (let* ((node (cdr cap))
              (node-beg (treesit-node-start node))
              (parent (treesit-node-parent node))
@@ -291,9 +289,15 @@ Math nodes that appear after a parse error in the document are excluded."
   math-nodes
   first-error)
 
+(defun typst-overlay--query-nodes (root)
+  "Return the `code' and `math' nodes under ROOT, as query captures.
+Both are found in one pass, as each walks the whole tree."
+  (treesit-query-capture root '((code) @code (math) @math)))
+
 (defun typst-overlay--first-error (root)
   "Return the start of the first parse error under ROOT, or nil."
-  (let ((captures (treesit-query-capture root '((ERROR) @error))))
+  (let ((captures (and (treesit-node-check root 'has-error)
+                       (treesit-query-capture root '((ERROR) @error)))))
     (and captures
          (apply #'min (mapcar (lambda (cap) (treesit-node-start (cdr cap)))
                               captures)))))
@@ -312,12 +316,13 @@ so they are compiled and underlined with their error."
          (first-error (typst-overlay--first-error root))
          (repair (and first-error (typst-overlay--repair-parse)))
          (root (if repair (car repair) root))
-         (first-error (if repair (typst-overlay--first-error root) first-error)))
+         (first-error (if repair (typst-overlay--first-error root) first-error))
+         (captures (typst-overlay--query-nodes root)))
     (make-typst-overlay-analysis
      :code-nodes (typst-overlay--sort-code-nodes
-                  (typst-overlay--collect-code-nodes root))
+                  (typst-overlay--collect-code-nodes captures))
      :math-nodes (typst-overlay--sort-math-nodes
-                  (nconc (typst-overlay--collect-math-nodes root first-error)
+                  (nconc (typst-overlay--collect-math-nodes captures first-error)
                          (mapcar (pcase-lambda (`(,beg . ,end))
                                    (typst-overlay--span-math-node beg end))
                                  (cdr repair))))
