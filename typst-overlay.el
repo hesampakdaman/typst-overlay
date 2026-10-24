@@ -794,6 +794,15 @@ The cache folder may be deleted while overlays are shown."
   (and artifact
        (file-exists-p (typst-overlay-artifact-svg-path artifact))))
 
+(defun typst-overlay--artifact-reusable-p (record element artifact)
+  "Return non-nil if ARTIFACT, RECORD's, can be shown for ELEMENT.
+It can if RECORD's overlay already shows it where ELEMENT is, as when
+text typed before ELEMENT moved it, or else if its SVG is on disk.
+The overlay is checked first: after an edit, every equation after it
+has moved, and checking the disk for each of them is slow."
+  (or (and record (typst-overlay--overlay-shows-p record element artifact))
+      (typst-overlay--artifact-live-p artifact)))
+
 (cl-defstruct typst-overlay-record
   element      ;; typst-overlay-element (current occurrence)
   state        ;; 'rendering 'visible 'stale 'failed
@@ -912,7 +921,7 @@ Cases:
                 (record (typst-overlay--get-record registry old-element))
                 (artifact (and record
                                (typst-overlay-record-artifact record))))
-           (when (typst-overlay--artifact-live-p artifact)
+           (when (typst-overlay--artifact-reusable-p record new-element artifact)
              (push (make-typst-overlay-place-op
                     :old old-element
                     :new new-element
@@ -961,7 +970,7 @@ Cases:
                 (record (typst-overlay--get-record registry old-element))
                 (artifact (and record
                                (typst-overlay-record-artifact record))))
-           (unless (typst-overlay--artifact-live-p artifact)
+           (unless (typst-overlay--artifact-reusable-p record new-element artifact)
              (push (make-typst-overlay-render-op
                     :old old-element
                     :new new-element)

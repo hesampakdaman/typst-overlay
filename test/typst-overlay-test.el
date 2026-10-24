@@ -621,8 +621,8 @@ and `compiled' the equations compiled, in order."
      "$a$ and $b$" ((replace "$b$" "$c$") (replace "$c$" "$b$")) () ("$a$" "$b$"))
     ("reopened: images loaded from the cache folder"
      "$a$ and $b$" (reopen) () ("$a$" "$b$"))
-    ("images deleted from disk, then moved: compiled again"
-     "$a$ and $b$" (delete-images (insert 1 "New. ")) ("$a$" "$b$") ("$a$" "$b$"))
+    ("images deleted from disk, then moved: overlays kept, nothing read"
+     "$a$ and $b$" (delete-images (insert 1 "New. ")) () ("$a$" "$b$"))
     ("images deleted from disk, edited and restored: compiled again"
      "$a$ and $b$" (delete-images (replace "$b$" "$c$") (replace "$c$" "$b$"))
      ("$b$") ("$a$" "$b$"))
