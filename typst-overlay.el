@@ -39,6 +39,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'seq)
+(require 'project)
 (require 'subr-x)
 (require 'treesit)
 
@@ -1367,16 +1368,22 @@ or those cached before this was written to the SVG, are centered."
   prelude-end  ;; last line of its prelude, or BEG if it has none
   end)         ;; last line of its block
 
-(defun typst-overlay--job-block (element)
+(defun typst-overlay--job-block (element &optional dir root)
   "Return (BLOCK . PRELUDE-LINES) for ELEMENT.
 BLOCK is a Typst block rendering ELEMENT with its prelude, ending in
-a newline.  PRELUDE-LINES is how many lines its prelude takes."
+a newline.  PRELUDE-LINES is how many lines its prelude takes.
+
+If DIR and ROOT are given, the relative paths the prelude imports
+from DIR are made absolute in ROOT, see `typst-overlay--root-paths'."
   (let* ((prelude (concat
                    (unless (string-empty-p typst-overlay-extra-prelude)
                      (concat typst-overlay-extra-prelude "\n"))
                    (let ((text (typst-overlay-element-prelude-text element)))
                      (unless (string-empty-p text)
-                       (concat text "\n"))))))
+                       (concat text "\n")))))
+         (prelude (if (and dir root)
+                      (typst-overlay--root-paths prelude dir root)
+                    prelude)))
     (cons (concat "#[\n"
                   prelude
                   ;; Number each equation as if compiled on its own.
@@ -1389,10 +1396,11 @@ a newline.  PRELUDE-LINES is how many lines its prelude takes."
                   "]\n")
           (cl-count ?\n prelude))))
 
-(defun typst-overlay--batch-source (jobs)
+(defun typst-overlay--batch-source (jobs &optional dir root)
   "Return (SOURCE . LINES) for compiling JOBS as one document.
 LINES has a `typst-overlay-job-lines' per job, in order, telling
-which lines of SOURCE belong to it."
+which lines of SOURCE belong to it.  DIR and ROOT are passed on to
+`typst-overlay--job-block'."
   (let ((parts (list typst-overlay--source-header))
         (line (1+ (cl-count ?\n typst-overlay--source-header)))
         lines)
@@ -1401,7 +1409,8 @@ which lines of SOURCE belong to it."
         (push "#pagebreak()\n" parts)
         (cl-incf line))
       (pcase-let ((`(,block . ,prelude-lines)
-                   (typst-overlay--job-block (typst-overlay-job-element job))))
+                   (typst-overlay--job-block (typst-overlay-job-element job)
+                                             dir root)))
         (push block parts)
         (push (make-typst-overlay-job-lines
                :beg line
@@ -1410,6 +1419,37 @@ which lines of SOURCE belong to it."
               lines)
         (cl-incf line (cl-count ?\n block))))
     (cons (apply #'concat (nreverse parts)) (nreverse lines))))
+
+(defun typst-overlay--project-root (dir)
+  "Return the root of the project DIR is in, or DIR outside a project.
+Typst may only read files in the root, so equations can import files
+above DIR in their project, as in #import \"../defs.typ\"."
+  (let ((root (when-let* ((project (project-current nil dir)))
+                (file-name-as-directory (expand-file-name (project-root project))))))
+    (if (and root (string-prefix-p root dir))
+        root
+      dir)))
+
+(defun typst-overlay--root-paths (prelude dir root)
+  "Return PRELUDE with its relative paths from DIR made absolute in ROOT.
+Typst reads the source from stdin as if it were a file in ROOT, so a
+relative path in #import \"defs.typ\" would be looked up in ROOT, not
+in DIR next to the buffer's file.  Written from ROOT, as in
+#import \"/sub/defs.typ\", it is found wherever DIR is.  Paths of
+#import and #include are rewritten; package and absolute paths are
+left alone, as are those outside ROOT, which typst then reports."
+  (if (string= dir root)
+      prelude
+    (with-temp-buffer
+      (insert prelude)
+      (goto-char (point-min))
+      (while (re-search-forward
+              "^[ \t]*#\\(?:import\\|include\\)[ \t]+\"\\([^\"/@][^\"]*\\)\""
+              nil t)
+        (let ((path (expand-file-name (match-string 1) dir)))
+          (when (string-prefix-p root path)
+            (replace-match (concat "/" (file-relative-name path root)) t t nil 1))))
+      (buffer-string))))
 
 (defun typst-overlay--compile-errors (output)
   "Return (LINE . MESSAGE) for each error in typst OUTPUT, in order.
@@ -1512,16 +1552,20 @@ ARTIFACT-CACHE receives the results."
   "Compile JOBS of BUFFER into a temporary folder in the cache.
 ARTIFACT-CACHE receives the results.  SESSION is the
 `typst-overlay--session' the batch belongs to."
-  (let* ((source (typst-overlay--batch-source jobs))
+  (let* (;; #import paths are relative to the buffer's file, or for
+         ;; buffers without one, its directory.
+         (file-dir (with-current-buffer buffer
+                     (expand-file-name (if buffer-file-name
+                                           (file-name-directory buffer-file-name)
+                                         default-directory))))
+         (root (typst-overlay--project-root file-dir))
+         (source (typst-overlay--batch-source jobs file-dir root))
          (cache-dir (file-name-directory
                      (typst-overlay-job-svg-path (car jobs))))
          (dir (make-temp-file (expand-file-name "batch-" cache-dir) t))
-         ;; Resolve #import paths relative to the buffer's file, or for
-         ;; buffers without one, its directory.
-         (default-directory (with-current-buffer buffer
-                              (if buffer-file-name
-                                  (file-name-directory buffer-file-name)
-                                default-directory))))
+         ;; Typst takes the folder it runs in as the root of a source
+         ;; read from stdin.
+         (default-directory root))
     (typst-overlay--compile-async
      (car source) dir
      (lambda (ok output)

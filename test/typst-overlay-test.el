@@ -388,6 +388,57 @@ Return the `user-error' message and whether the mode stayed on."
           (should (equal (line (- (typst-overlay-job-lines-end second) 3)) "$]"))
           (should (equal (line (typst-overlay-job-lines-end second)) "]")))))))
 
+(ert-deftest typst-overlay-test-root-paths ()
+  "Relative import paths are rewritten from the project root."
+  (cl-flet ((rebase (prelude)
+              (typst-overlay--root-paths prelude "/p/sub/" "/p/")))
+    (should (equal (rebase "#import \"defs.typ\": f") "#import \"/sub/defs.typ\": f"))
+    (should (equal (rebase "#import \"../common.typ\"") "#import \"/common.typ\""))
+    (should (equal (rebase "#include \"part.typ\"") "#include \"/sub/part.typ\""))
+    ;; Packages, absolute paths and paths outside the root are kept.
+    (dolist (prelude '("#import \"@preview/physica:0.9.5\": *"
+                       "#import \"/common.typ\""
+                       "#import \"../../outside.typ\""
+                       "#let path = \"defs.typ\""))
+      (should (equal (rebase prelude) prelude)))
+    ;; Nothing to rewrite when the file is in the root.
+    (should (equal (typst-overlay--root-paths "#import \"defs.typ\"" "/p/" "/p/")
+                   "#import \"defs.typ\""))))
+
+(ert-deftest typst-overlay-test-project-root ()
+  "Batches run from the project root, with imports rewritten to it."
+  (let* ((root (file-name-as-directory (make-temp-file "typst-overlay-test-" t)))
+         (sub (expand-file-name "sub/" root))
+         (project-vc-extra-root-markers '(".typst-overlay-test-root"))
+         compiled)
+    (unwind-protect
+        (progn
+          (make-directory sub)
+          (write-region "" nil (expand-file-name ".typst-overlay-test-root" root))
+          (should (equal (typst-overlay--project-root sub) root))
+          ;; Outside a project, the folder itself.
+          (should (equal (typst-overlay--project-root temporary-file-directory)
+                         temporary-file-directory))
+          (cl-letf (((symbol-function 'typst-overlay--compile-async)
+                     (lambda (source _dir _callback)
+                       (setq compiled (cons source default-directory)))))
+            (with-temp-buffer
+              (setq buffer-file-name (expand-file-name "main.typ" sub))
+              (typst-overlay--run-batch
+               (list (make-typst-overlay-job
+                      :element (typst-overlay--make-element
+                                (make-typst-overlay-math-node
+                                 :beg 30 :end 33 :text "$a$" :text-hash (md5 "$a$"))
+                                (list (make-typst-overlay-code-node
+                                       :beg 1 :end 28 :text "#import \"../common.typ\": a"
+                                       :hash "")))
+                      :svg-path (expand-file-name "a.svg" root)))
+               nil (current-buffer) typst-overlay--session)
+              (set-buffer-modified-p nil)))
+          (should (equal (cdr compiled) root))
+          (should (string-search "#import \"/common.typ\": a" (car compiled))))
+      (delete-directory root t))))
+
 (ert-deftest typst-overlay-test-failed-jobs ()
   "An error is traced to its job, or to every job sharing a prelude."
   (let* ((typst-overlay-extra-prelude "")
