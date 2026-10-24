@@ -309,10 +309,10 @@ parsed again with its broken equations blanked out, see
 `typst-overlay--repair-parse'.  Those equations are still returned,
 so they are compiled and underlined with their error."
   (let* ((root (treesit-buffer-root-node))
-         (repair (and (typst-overlay--first-error root)
-                      (typst-overlay--repair-parse)))
+         (first-error (typst-overlay--first-error root))
+         (repair (and first-error (typst-overlay--repair-parse)))
          (root (if repair (car repair) root))
-         (first-error (typst-overlay--first-error root)))
+         (first-error (if repair (typst-overlay--first-error root) first-error)))
     (make-typst-overlay-analysis
      :code-nodes (typst-overlay--sort-code-nodes
                   (typst-overlay--collect-code-nodes root))
@@ -564,12 +564,11 @@ typst may use."
   math-nodes)
 
 (defun typst-overlay--collect-prelude-code-nodes (math-node code-nodes)
-  "Return prelude CODE-NODES that occur before MATH-NODE.
-
-A code node contributes to the prelude if:
-- it appears before the math node in the buffer,
-- the math node is within its scope, if it has one, and
-- it satisfies `typst-overlay--prelude-code-node-p'
+  "Return the CODE-NODES that are in MATH-NODE's prelude.
+CODE-NODES are those that satisfy `typst-overlay--prelude-code-node-p'.
+One contributes to the prelude if:
+- it appears before the math node in the buffer, and
+- the math node is within its scope, if it has one.
 
 The result is returned in document order."
   (let ((math-beg (typst-overlay-math-node-beg math-node))
@@ -577,8 +576,7 @@ The result is returned in document order."
     (dolist (code-node code-nodes)
       (when (and (< (typst-overlay-code-node-beg code-node) math-beg)
                  (let ((scope (typst-overlay-code-node-scope code-node)))
-                   (or (null scope) (< math-beg (cdr scope))))
-                 (typst-overlay--prelude-code-node-p code-node))
+                   (or (null scope) (< math-beg (cdr scope)))))
         (push code-node result)))
     (nreverse result)))
 
@@ -594,10 +592,14 @@ The result is returned in document order."
 Each math node becomes an element paired with its prelude code."
   (let* ((code-nodes (typst-overlay-analysis-code-nodes analysis))
          (math-nodes (typst-overlay-analysis-math-nodes analysis))
+         ;; Once, rather than for every math node.
+         (prelude-code-nodes (seq-filter #'typst-overlay--prelude-code-node-p
+                                         code-nodes))
          elements)
     (dolist (math-node math-nodes)
       (let* ((prelude-nodes
-              (typst-overlay--collect-prelude-code-nodes math-node code-nodes))
+              (typst-overlay--collect-prelude-code-nodes
+               math-node prelude-code-nodes))
              (element
               (typst-overlay--make-element
                math-node prelude-nodes)))
@@ -833,7 +835,8 @@ Cases:
                 (record (typst-overlay--get-record registry old-element))
                 (artifact (and record (typst-overlay-record-artifact record)))
                 (overlay (and record (typst-overlay-record-overlay record))))
-           (when (and (typst-overlay--artifact-live-p artifact) (null overlay))
+           ;; Overlay first: checking the disk for every equation is slow.
+           (when (and (null overlay) (typst-overlay--artifact-live-p artifact))
              (push (make-typst-overlay-place-op
                     :old old-element
                     :new new-element
@@ -950,10 +953,10 @@ ARTIFACT-CACHE is passed on when starting renders."
 
 (defun typst-overlay--take-record (registry element)
   "Remove the record for ELEMENT from REGISTRY and return it.
-Its overlay is deleted.  Return nil if ELEMENT is nil or has no record."
+Its overlay is kept, for the op applied to it to reuse or delete.
+Return nil if ELEMENT is nil or has no record."
   (let ((record (and element (typst-overlay--get-record registry element))))
     (when record
-      (typst-overlay--delete-record-overlay record)
       (typst-overlay--remove-record registry element))
     record))
 
@@ -968,18 +971,34 @@ Its overlay is deleted.  Return nil if ELEMENT is nil or has no record."
 (defun typst-overlay--apply-place-op (op record registry generation)
   "Apply place OP by making its new element visible in REGISTRY.
 RECORD is the old element's record, already taken out, or nil.
-GENERATION stamps the record so stale async results can be ignored."
+GENERATION stamps the record so stale async results can be ignored.
+
+An equation moves when text is typed before it, and its overlay moves
+with it.  So an overlay already showing ARTIFACT where the equation
+is now is kept, rather than replaced by reading the SVG again."
   (let ((new-element (typst-overlay-place-op-new op))
         (artifact (typst-overlay-place-op-artifact op)))
     (unless record
       (setq record (make-typst-overlay-record)))
+    (unless (typst-overlay--overlay-shows-p record new-element artifact)
+      (typst-overlay--delete-record-overlay record)
+      (setf (typst-overlay-record-overlay record)
+            (typst-overlay--place-artifact-overlay new-element artifact)))
     (setf (typst-overlay-record-element record) new-element
           (typst-overlay-record-state record) 'visible
           (typst-overlay-record-artifact record) artifact
-          (typst-overlay-record-generation record) generation
-          (typst-overlay-record-overlay record)
-          (typst-overlay--place-artifact-overlay new-element artifact))
+          (typst-overlay-record-generation record) generation)
     (typst-overlay--put-record registry new-element record)))
+
+(defun typst-overlay--overlay-shows-p (record element artifact)
+  "Return non-nil if RECORD's overlay shows ARTIFACT over ELEMENT."
+  (let ((overlay (typst-overlay-record-overlay record)))
+    (and overlay
+         (overlay-buffer overlay)
+         (overlay-get overlay 'typst-overlay)
+         (eq (typst-overlay-record-artifact record) artifact)
+         (= (overlay-start overlay) (typst-overlay-element-beg element))
+         (= (overlay-end overlay) (typst-overlay-element-end element)))))
 
 (defun typst-overlay--apply-render-op (op record registry generation)
   "Apply render OP by registering its new element in REGISTRY.
@@ -987,7 +1006,8 @@ RECORD is the old element's record, already taken out, or nil.  It is
 stamped with GENERATION.  Return the new element, to be rendered by
 `typst-overlay--start-renders'."
   (let ((new-element (typst-overlay-render-op-new op)))
-    (unless record
+    (if record
+        (typst-overlay--delete-record-overlay record)
       (setq record (make-typst-overlay-record)))
     (setf (typst-overlay-record-element record) new-element
           (typst-overlay-record-state record) 'rendering

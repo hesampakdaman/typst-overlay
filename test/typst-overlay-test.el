@@ -690,6 +690,30 @@ See `typst-overlay-test--edit-cases'."
         (should (equal (list name expected-compiled expected-shown)
                        (list name compiled (typst-overlay-test--shown))))))))
 
+(ert-deftest typst-overlay-test-moved-overlays-kept ()
+  "Equations moved by typing before them keep their overlays."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches "$a$ and $b$, $c$" #'ignore
+    (run-compiles)
+    (cl-flet ((overlays ()
+                (seq-filter (lambda (overlay) (overlay-get overlay 'typst-overlay))
+                            (overlays-in (point-min) (point-max)))))
+      (let ((before (overlays))
+            (reads 0))
+        (cl-letf* ((read-svg (symbol-function 'typst-overlay--read-svg))
+                   ((symbol-function 'typst-overlay--read-svg)
+                    (lambda (path) (cl-incf reads) (funcall read-svg path))))
+          (goto-char (point-min))
+          (insert "New. ")
+          (search-forward "$b$")
+          (replace-match "$bb$" t t)
+          (typst-overlay-refresh)
+          (run-compiles))
+        ;; $a$ and $c$ kept theirs; only $bb$ was read, once compiled.
+        (should (= reads 1))
+        (should (equal (typst-overlay-test--shown) '("$a$" "$bb$" "$c$")))
+        (should (= (length (seq-intersection before (overlays))) 2))))))
+
 (ert-deftest typst-overlay-test-idle-refresh ()
   "Edits refresh the overlays once Emacs is idle, unless turned off."
   (skip-unless (treesit-language-available-p 'typst))
