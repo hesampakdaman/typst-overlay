@@ -1040,7 +1040,7 @@ This holds whether Eglot starts before or after the mode."
                                  (directory-files-recursively typst-overlay-cache-directory
                                                               "" t))
                          #'string<)
-                   (list (replace-regexp-in-string "/" "!" (file-name-as-directory dir))
+                   (list (typst-overlay--cache-dir-name (file-name-as-directory dir))
                          (concat (typst-overlay-element-cache-key
                                   (typst-overlay-record-element
                                    (car (hash-table-values (typst-overlay-registry-records
@@ -1055,14 +1055,18 @@ This holds whether Eglot starts before or after the mode."
       (run-compiles)
       (should (equal (typst-overlay-test--shown) '("$x$")))
       (should (file-directory-p (typst-overlay--cache-dir)))
-      (should (string-suffix-p "!tmp!" (typst-overlay--cache-dir))))
-    ;; A ! in the path is written !!; a path too long is hashed.
-    (let ((buffer-file-name "/a!b/c.typ"))
-      (should (equal (typst-overlay--cache-dir)
-                     (expand-file-name "!a!!b!" typst-overlay-cache-directory))))
-    (let ((buffer-file-name (concat "/" (make-string 300 ?a) "/c.typ")))
-      (should (equal (file-name-nondirectory (typst-overlay--cache-dir))
-                     (md5 (concat "/" (make-string 300 ?a) "/")))))))
+      (should (string-suffix-p "!tmp!" (typst-overlay--cache-dir))))))
+
+(ert-deftest typst-overlay-test-cache-dir-name ()
+  "Cache folders are named after their folder's path, as backup files are."
+  (should (equal (typst-overlay--cache-dir-name "/home/me/notes/") "!home!me!notes!"))
+  (should (equal (typst-overlay--cache-dir-name "/a!b/") "!a!!b!"))
+  ;; Windows drives, as : is not allowed in file names there.
+  (should (equal (typst-overlay--cache-dir-name "c:/Users/me/") "!drive_c!Users!me!"))
+  ;; Too long a path is hashed.
+  (let ((dir (concat "/" (make-string 120 ?a) "/")))
+    (should (equal (typst-overlay--cache-dir-name dir)
+                   (md5 (concat "!" (make-string 120 ?a) "!"))))))
 
 (ert-deftest typst-overlay-test-eldoc-org ()
   "ElDoc is turned on in org buffers, which have no ElDoc function."

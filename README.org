@@ -40,7 +40,7 @@ Enable the minor mode with =M-x typst-overlay-mode=, or with a hook as above, an
 While point is inside an equation you see its source, and its image is shown beside it in a thin box (face =typst-overlay-preview=), or below it if the equation spans lines. The image keeps up as you type, and goes away when point leaves the equation. Set =typst-overlay-preview= to =nil= to turn it off.
 
 ** Cache
-Rendered equations are saved as SVG files in =typst-overlay-cache-directory=, by default =~/.cache/typst-overlay/=, so reopening a file shows them without compiling again. Nothing is written next to your files. Each folder of files gets its own folder there, named after its path as for backup files: =/home/me/notes/= becomes =!home!me!notes!=. Buffers without a file, such as those of =org-capture=, use their own folder's. Old SVG files are not removed; the directory, or a folder in it, is safe to delete at any time, and equations are compiled again as needed.
+Rendered equations are saved as SVG files in =typst-overlay-cache-directory=, by default =~/.cache/typst-overlay/= (=%LOCALAPPDATA%\typst-overlay\= on Windows), so reopening a file shows them without compiling again. Nothing is written next to your files. Each folder of files gets its own folder there, named after its path as for backup files: =/home/me/notes/= becomes =!home!me!notes!=. Buffers without a file, such as those of =org-capture=, use their own folder's. Old SVG files are not removed; the directory, or a folder in it, is safe to delete at any time, and equations are compiled again as needed.
 
 Before version 0.7.0 they were saved in a =.typst-overlay-cache= directory next to each file. Those directories are no longer used and can be deleted.
 
