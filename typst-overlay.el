@@ -73,11 +73,13 @@ headings."
   (expand-file-name "typst-overlay/"
                     (cond ((getenv "XDG_CACHE_HOME"))
                           ((and (eq system-type 'windows-nt) (getenv "LOCALAPPDATA")))
+                          ((eq system-type 'darwin) "~/Library/Caches")
                           ((file-directory-p "~/.cache") "~/.cache")
                           (t user-emacs-directory)))
   "Directory where rendered equations are kept, as SVG files.
-By default it is in the user's cache directory: $XDG_CACHE_HOME or
-~/.cache, %LOCALAPPDATA% on Windows, or else `user-emacs-directory'.
+By default it is in the user's cache directory: $XDG_CACHE_HOME if
+set, %LOCALAPPDATA% on Windows, ~/Library/Caches on macOS, or else
+~/.cache, or failing that `user-emacs-directory'.
 They are kept in a folder per folder of the files they were rendered
 for, named after its path, so reopening a file shows them without
 compiling again.  The directory is safe to delete at any time."
