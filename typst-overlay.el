@@ -96,6 +96,15 @@ example on save with `typst-overlay-save-refresh'."
                  (number :tag "Seconds"))
   :group 'typst-overlay)
 
+(defcustom typst-overlay-preview t
+  "Whether to show the equation being edited rendered beside it.
+While point is inside an equation, its source is shown instead of its
+image.  If non-nil, the image is also shown after the equation, or
+below it if the equation spans lines, and is updated as the equation
+is rendered again; see `typst-overlay-idle-refresh-delay'."
+  :type 'boolean
+  :group 'typst-overlay)
+
 (defcustom typst-overlay-system-fonts nil
   "Whether typst may use the fonts installed on the system.
 If nil, it uses only the fonts it comes with, which include its
@@ -1108,7 +1117,56 @@ Flymake already shows a diagnostic, which Flymake documents itself."
         (typst-overlay--show-overlay active))
       (when (overlayp current)
         (typst-overlay--hide-overlay current))
-      (setq typst-overlay--active-overlay current))))
+      (setq typst-overlay--active-overlay current)))
+  (typst-overlay--update-preview))
+
+(defvar-local typst-overlay--preview nil
+  "Overlay showing the image of the equation point is in, or nil.
+See `typst-overlay-preview'.")
+
+(defun typst-overlay--update-preview ()
+  "Show the image of the equation being edited after it.
+That is the equation of the hidden overlay at point.  While it is
+being edited it has no overlay, until it is rendered again, so the
+preview keeps its last image as long as point stays inside it.
+Otherwise the preview is removed."
+  (let ((active typst-overlay--active-overlay)
+        (preview typst-overlay--preview))
+    (cond
+     ((and typst-overlay-preview (overlayp active) (overlay-buffer active))
+      (unless (overlayp preview)
+        ;; Like the equation overlays: text typed right before or
+        ;; after the equation stays outside it.
+        (setq preview (make-overlay (overlay-start active) (overlay-end active)
+                                    nil t nil)
+              typst-overlay--preview preview)
+        (overlay-put preview 'evaporate t))
+      ;; An overlay's image and text never change, so there is nothing
+      ;; to update while it stays the active one.
+      (unless (eq (overlay-get preview 'typst-overlay-source) active)
+        (overlay-put preview 'typst-overlay-source active)
+        (move-overlay preview (overlay-start active) (overlay-end active))
+        (overlay-put preview 'after-string
+                     (concat
+                      ;; Below an equation that spans lines, else beside it.
+                      (if (string-search "\n" (buffer-substring-no-properties
+                                               (overlay-start active)
+                                               (overlay-end active)))
+                          "\n"
+                        " ")
+                      (propertize " " 'display
+                                  (overlay-get active 'typst-overlay-image))))))
+     ((and (overlayp preview)
+           (overlay-buffer preview)
+           (<= (overlay-start preview) (point))
+           (< (point) (overlay-end preview))))
+     (t (typst-overlay--delete-preview)))))
+
+(defun typst-overlay--delete-preview ()
+  "Remove the preview, if any."
+  (when (overlayp typst-overlay--preview)
+    (delete-overlay typst-overlay--preview))
+  (setq typst-overlay--preview nil))
 
 (defun typst-overlay--invalidate-overlay (overlay &rest _args)
   "Delete OVERLAY if its underlying text is modified."
@@ -1165,7 +1223,8 @@ falls back to a fixed `typst-overlay-scale'."
     (overlay-put overlay 'modification-hooks '(typst-overlay--invalidate-overlay))
     (when (and (>= (point) beg) (<= (point) end))
       (typst-overlay--hide-overlay overlay)
-      (setq typst-overlay--active-overlay overlay))
+      (setq typst-overlay--active-overlay overlay)
+      (typst-overlay--update-preview))
     overlay))
 
 (defun typst-overlay--teardown ()
@@ -1176,6 +1235,7 @@ falls back to a fixed `typst-overlay-scale'."
   (when (overlayp typst-overlay--active-overlay)
     (typst-overlay--show-overlay typst-overlay--active-overlay))
   (setq typst-overlay--active-overlay nil)
+  (typst-overlay--delete-preview)
   (when typst-overlay--registry
     (maphash
      (lambda (_key record)

@@ -37,6 +37,8 @@ To render math in org buffers too, add =(org-mode . typst-overlay-mode)= and =(o
 ** Usage
 Enable the minor mode with =M-x typst-overlay-mode=, or with a hook as above, and the buffer's equations are rendered. Editing an equation removes its overlay, and it is rendered again once you stop typing for =typst-overlay-idle-refresh-delay= seconds. To refresh only when you ask, set that option to =nil= and run =M-x typst-overlay-refresh=, or add =typst-overlay-save-refresh= to =after-save-hook= to refresh on save.
 
+While point is inside an equation you see its source, and its image is shown beside it, or below it if the equation spans lines. The image keeps up as you type, and goes away when point leaves the equation. Set =typst-overlay-preview= to =nil= to turn it off.
+
 ** Cache
 Rendered equations are saved as SVG files in a =.typst-overlay-cache= directory next to the file, so reopening it shows them without compiling again. Buffers without a file, such as those of =org-capture=, use one in the temporary directory instead. Old SVG files are not removed; the directory is safe to delete at any time, and equations are compiled again as needed. You may want to add it to your =.gitignore=.
 
@@ -59,6 +61,7 @@ All options are available via =M-x customize-group RET typst-overlay=.
 | =typst-overlay-max-active-compiles= | =8=                    | Max concurrent compilation processes |
 | =typst-overlay-extra-prelude=       | =""=                   | Extra typst prelude code             |
 | =typst-overlay-idle-refresh-delay=  | =0.25=                 | Idle seconds before re-rendering     |
+| =typst-overlay-preview=             | =t=                    | Show the edited equation beside it   |
 | =typst-overlay-system-fonts=        | =nil=                  | Let typst use the system's fonts     |
 | =typst-overlay-font-paths=          | =nil=                  | Extra folders to search for fonts    |
 | =typst-overlay-use-flymake=         | =org=                  | Where to report errors to Flymake    |

@@ -714,6 +714,52 @@ See `typst-overlay-test--edit-cases'."
         (should (equal (typst-overlay-test--shown) '("$a$" "$bb$" "$c$")))
         (should (= (length (seq-intersection before (overlays))) 2))))))
 
+(defun typst-overlay-test--preview ()
+  "Describe the preview: its placement and the equation in its image.
+Placement is \"beside\" or \"below\", or the result is nil if there is
+no preview."
+  (let ((preview typst-overlay--preview))
+    (when (and preview (overlay-buffer preview))
+      (let* ((string (overlay-get preview 'after-string))
+             (data (plist-get (cdr (get-text-property 1 'display string)) :data)))
+        (string-match "<!-- \\(\\(?:.\\|\n\\)*\\) -->" data)
+        (list (if (eq (aref string 0) ?\n) "below" "beside")
+              (match-string 1 data))))))
+
+(ert-deftest typst-overlay-test-preview ()
+  "The equation point is in is shown beside it, and kept while edited."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches "Text $a$ and\n$\nc\n$ end." #'ignore
+    (run-compiles)
+    (cl-flet ((move (string)
+                (goto-char (point-min))
+                (search-forward string)
+                (typst-overlay--post-command-update)))
+      (move "$a")
+      (should (equal (typst-overlay-test--preview) '("beside" "$a$")))
+      ;; Its overlay is gone while it is edited; the old image stays.
+      (insert "x")
+      (typst-overlay--post-command-update)
+      (should (equal (typst-overlay-test--preview) '("beside" "$a$")))
+      ;; Rendered again, while point is still inside.
+      (typst-overlay-refresh)
+      (run-compiles)
+      (typst-overlay--post-command-update)
+      (should (equal (typst-overlay-test--preview) '("beside" "$ax$")))
+      (move "\nc")
+      (should (equal (typst-overlay-test--preview) '("below" "$\nc\n$")))
+      (move " end")
+      (should-not (typst-overlay-test--preview))
+      (let ((typst-overlay-preview nil))
+        (move "$a")
+        (should-not (typst-overlay-test--preview)))
+      ;; Turning the mode off removes it.
+      (move "$a")
+      (should (typst-overlay-test--preview))
+      (typst-overlay-mode -1)
+      (should-not (typst-overlay-test--preview))
+      (typst-overlay-mode 1))))
+
 (ert-deftest typst-overlay-test-idle-refresh ()
   "Edits refresh the overlays once Emacs is idle, unless turned off."
   (skip-unless (treesit-language-available-p 'typst))
