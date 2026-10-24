@@ -57,6 +57,7 @@
 (defconst typst-overlay-version (package-get-version)
   "Version of typst-overlay, read from its Version header when loaded.")
 
+;;;###autoload
 (defun typst-overlay-version ()
   "Show and return the version of typst-overlay."
   (interactive)
