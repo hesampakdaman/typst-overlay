@@ -1905,10 +1905,20 @@ so one scheduled refresh covers the edits typed until then."
 (defvar-local typst-overlay--last-point nil
   "Tracks previous point location to detect upward cursor movement into overlays.")
 
+(defconst typst-overlay--line-up-commands
+  '(previous-line previous-logical-line evil-previous-line evil-previous-visual-line)
+  "Commands that move point up by lines.
+See `typst-overlay--handle-upward-entry'.")
+
 (defun typst-overlay--handle-upward-entry ()
-  "Jump to overlay end if entering a `typst-overlay' from below."
+  "Jump to overlay end if moving up a line into a `typst-overlay'.
+A shown image is a single glyph at the start of its equation, so
+moving up onto it would put point on the first line of an equation
+that spans lines.  Other commands, such as searching or clicking,
+put point where they meant to."
   (let ((curr-point (point)))
     (when (and typst-overlay--last-point
+               (memq this-command typst-overlay--line-up-commands)
                (< curr-point typst-overlay--last-point)) ; Moving upwards
       (let* ((overlays (overlays-at curr-point))
              (typst-ov (cl-find-if (lambda (o) (overlay-get o 'typst-overlay)) overlays)))

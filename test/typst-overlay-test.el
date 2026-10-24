@@ -741,6 +741,25 @@ See `typst-overlay-test--edit-cases'."
       (typst-overlay--post-command-update)
       (should (eq (overlay-get overlay 'face) 'typst-overlay-equation)))))
 
+(ert-deftest typst-overlay-test-upward-entry ()
+  "Only moving up by lines into an equation puts point at its end."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches "Text $abcdef$ end." #'ignore
+    (run-compiles)
+    (cl-flet ((enter (command)
+                ;; From after the equation, onto its start.
+                (goto-char (point-max))
+                (typst-overlay--post-command-update)
+                (search-backward "$abc")
+                (let ((this-command command))
+                  (typst-overlay--post-command-update))
+                (current-column)))
+      ;; On its closing $.
+      (should (= (enter 'previous-line) 12))
+      ;; Searching or clicking puts point where it meant to.
+      (should (= (enter 'isearch-repeat-backward) 5))
+      (should (= (enter 'mouse-set-point) 5)))))
+
 (defun typst-overlay-test--preview ()
   "Describe the preview: its placement and the equation in its image.
 Placement is \"beside\" or \"below\", or the result is nil if there is
