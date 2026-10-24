@@ -65,7 +65,7 @@
 At 1.0 the math is drawn at the same size as the text around it.
 Equations follow that text's size, so they grow and shrink with
 `text-scale-adjust' and are larger in larger faces, such as org
-headings."
+headings.  Changing it resizes the equations already shown."
   :type 'number
   :group 'typst-overlay)
 
@@ -1385,6 +1385,39 @@ or those cached before this was written to the SVG, are centered."
       (setq typst-overlay--active-overlay overlay)
       (typst-overlay--update-preview))
     overlay))
+
+;; Watched rather than given a Customize setter, so `setq' resizes
+;; the equations too.
+(defvar typst-overlay--resize-timer nil
+  "Timer of the pending `typst-overlay--resize-images', or nil.")
+
+(defun typst-overlay--scale-changed (&rest _)
+  "Resize the equations shown, after `typst-overlay-scale' changes.
+Watchers run before the new value is set, so this waits for it.  One
+resize covers any changes made until then."
+  (unless typst-overlay--resize-timer
+    (setq typst-overlay--resize-timer
+          (run-at-time 0 nil #'typst-overlay--resize-images))))
+
+(add-variable-watcher 'typst-overlay-scale #'typst-overlay--scale-changed)
+
+(defun typst-overlay--resize-images ()
+  "Create the images of every buffer's equations again at their scale.
+Each image keeps its SVG data, so nothing is read or compiled."
+  (setq typst-overlay--resize-timer nil)
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when typst-overlay-mode
+        (dolist (overlay (overlays-in (point-min) (point-max)))
+          (when-let* ((image (overlay-get overlay 'typst-overlay-image)))
+            (let ((resized (typst-overlay--create-image (plist-get (cdr image) :data))))
+              (overlay-put overlay 'typst-overlay-image resized)
+              ;; Hidden while point is in it.
+              (when (overlay-get overlay 'display)
+                (overlay-put overlay 'display resized)))))
+        (when typst-overlay--preview
+          (typst-overlay--delete-preview)
+          (typst-overlay--update-preview))))))
 
 (defun typst-overlay--teardown ()
   "Remove overlays and clear buffer-local runtime state."

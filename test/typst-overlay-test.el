@@ -1285,6 +1285,38 @@ EXPECTED is the size property the image is created with.")
                          (list :scale (plist-get props :scale)))))
           (should (equal (list name expected) (list name actual))))))))
 
+(ert-deftest typst-overlay-test-rescale ()
+  "Changing the scale resizes the equations shown and the preview."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--with-batches "Text $a$ and $b$." #'ignore
+    ;; Unlike the stub the batches use, keep the scale.
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (data _type _data-p &rest props)
+                 (append (list 'image :type 'svg :data data) props))))
+      (let ((typst-overlay-scale 1.0))
+        (run-compiles)
+        ;; Point in $b$: hidden, with its preview.
+        (goto-char (point-min))
+        (search-forward "$b")
+        (typst-overlay--post-command-update)
+        (setq typst-overlay-scale 2.0)
+        ;; As once Emacs is idle.
+        (while typst-overlay--resize-timer
+          (accept-process-output nil 0.01))
+        (cl-flet ((scale (image) (plist-get (cdr image) :scale)))
+          (dolist (overlay (seq-filter (lambda (ov) (overlay-get ov 'typst-overlay))
+                                       (overlays-in (point-min) (point-max))))
+            (should (equal (scale (overlay-get overlay 'typst-overlay-image)) 2.0))
+            (when (overlay-get overlay 'display)
+              (should (equal (scale (overlay-get overlay 'display)) 2.0))))
+          (should-not (overlay-get (typst-overlay--overlay-at-point) 'display))
+          (should (equal (scale (get-text-property
+                                 1 'display (overlay-get typst-overlay--preview
+                                                         'after-string)))
+                         2.0))
+          ;; Its source still shown, and its image kept for when it is left.
+          (should (equal (typst-overlay-test--shown) '("$a$" "$b$"))))))))
+
 ;;; Baseline
 
 (defconst typst-overlay-test--ascent-cases
