@@ -1011,119 +1011,60 @@ has moved, and checking the disk for each of them is slow."
 REGISTRY stores per-occurrence runtime records.
 ARTIFACT-CACHE is a hash table mapping cache-key to typst-overlay-artifact.
 GENERATION is the generation to stamp onto the returned plan."
-  (make-typst-overlay-render-plan
-   :generation generation
-   :delete (typst-overlay--plan-delete-ops diff)
-   :place (typst-overlay--plan-place-ops diff registry artifact-cache)
-   :render (typst-overlay--plan-render-ops diff registry artifact-cache)))
+  (let (place render)
+    (dolist (entry (typst-overlay-diff-entries diff))
+      (let ((op (typst-overlay--plan-entry entry registry artifact-cache)))
+        (cond
+         ((typst-overlay-place-op-p op) (push op place))
+         ((typst-overlay-render-op-p op) (push op render)))))
+    (make-typst-overlay-render-plan
+     :generation generation
+     :delete (mapcar (lambda (old) (make-typst-overlay-delete-op :old old))
+                     (typst-overlay-diff-deleted diff))
+     :place (nreverse place)
+     :render (nreverse render))))
 
-(defun typst-overlay--plan-delete-ops (diff)
-  "Build delete ops for all old elements deleted by DIFF."
-  (mapcar #'typst-overlay--make-delete-op
-          (typst-overlay-diff-deleted diff)))
-
-(defun typst-overlay--make-delete-op (old-element)
-  "Build a delete op for OLD-ELEMENT."
-  (make-typst-overlay-delete-op
-   :old old-element))
-
-(defun typst-overlay--plan-place-ops (diff registry artifact-cache)
-  "Build place ops from DIFF, REGISTRY and ARTIFACT-CACHE.
-Covers entries that can reuse an existing artifact.
+(defun typst-overlay--plan-entry (entry registry artifact-cache)
+  "Return the op for the diff ENTRY, or nil if it needs none.
+A place op shows an artifact it can reuse, from REGISTRY or
+ARTIFACT-CACHE, and a render op compiles it again.
 
 Cases:
-- moved + old record has artifact            -> place-op
+- unchanged + no overlay + artifact on disk  -> place-op
+- unchanged + stale record, nothing on disk  -> render-op
+- moved + old record's artifact reusable     -> place-op
+- moved otherwise                            -> render-op
 - added + artifact cache hit                 -> place-op
-- unchanged + artifact exists but no overlay -> place-op"
-  (let (ops)
-    (dolist (entry (typst-overlay-diff-entries diff))
+- added otherwise                            -> render-op"
+  (let* ((old-element (typst-overlay-diff-entry-old entry))
+         (new-element (typst-overlay-diff-entry-new entry))
+         (record (and old-element
+                      (typst-overlay--get-record registry old-element)))
+         (artifact (and record (typst-overlay-record-artifact record))))
+    (cl-flet ((place (artifact)
+                (make-typst-overlay-place-op
+                 :old old-element :new new-element :artifact artifact))
+              (render ()
+                (make-typst-overlay-render-op
+                 :old old-element :new new-element)))
       (pcase (typst-overlay-diff-entry-status entry)
         ('unchanged
-         (let* ((old-element (typst-overlay-diff-entry-old entry))
-                (new-element (typst-overlay-diff-entry-new entry))
-                (record (typst-overlay--get-record registry old-element))
-                (artifact (and record (typst-overlay-record-artifact record)))
-                (overlay (and record (typst-overlay-record-overlay record))))
-           ;; Overlay first: checking the disk for every equation is slow.
-           (when (and (null overlay) (typst-overlay--artifact-live-p artifact))
-             (push (make-typst-overlay-place-op
-                    :old old-element
-                    :new new-element
-                    :artifact artifact)
-                   ops))))
-
+         ;; Overlay first: checking the disk for every equation is slow.
+         ;; A stale record has no overlay.
+         (when (and record (null (typst-overlay-record-overlay record)))
+           (cond
+            ((typst-overlay--artifact-live-p artifact) (place artifact))
+            ((eq (typst-overlay-record-state record) 'stale) (render)))))
         ('moved
-         (let* ((old-element (typst-overlay-diff-entry-old entry))
-                (new-element (typst-overlay-diff-entry-new entry))
-                (record (typst-overlay--get-record registry old-element))
-                (artifact (and record
-                               (typst-overlay-record-artifact record))))
-           (when (typst-overlay--artifact-reusable-p record new-element artifact)
-             (push (make-typst-overlay-place-op
-                    :old old-element
-                    :new new-element
-                    :artifact artifact)
-                   ops))))
-
+         (if (typst-overlay--artifact-reusable-p record new-element artifact)
+             (place artifact)
+           (render)))
         ('added
-         (let* ((new-element (typst-overlay-diff-entry-new entry))
-                (cache-key (typst-overlay-element-cache-key new-element))
-                (artifact (gethash cache-key artifact-cache)))
-           (when (typst-overlay--artifact-live-p artifact)
-             (push (make-typst-overlay-place-op
-                    :old nil
-                    :new new-element
-                    :artifact artifact)
-                   ops))))))
-    (nreverse ops)))
-
-(defun typst-overlay--plan-render-ops (diff registry artifact-cache)
-  "Build render ops from DIFF, REGISTRY and ARTIFACT-CACHE.
-Covers entries that do not have a reusable artifact.
-
-Cases:
-- moved + old record has no artifact      -> render-op
-- added + artifact cache miss             -> render-op
-- unchanged + stale record has no artifact -> render-op"
-  (let (ops)
-    (dolist (entry (typst-overlay-diff-entries diff))
-      (pcase (typst-overlay-diff-entry-status entry)
-        ('unchanged
-         (let* ((old-element (typst-overlay-diff-entry-old entry))
-                (new-element (typst-overlay-diff-entry-new entry))
-                (record (typst-overlay--get-record registry old-element)))
-           (when (and record
-                      (eq (typst-overlay-record-state record) 'stale)
-                      (not (typst-overlay--artifact-live-p
-                            (typst-overlay-record-artifact record))))
-             (push (make-typst-overlay-render-op
-                    :old old-element
-                    :new new-element)
-                   ops))))
-
-        ('moved
-         (let* ((old-element (typst-overlay-diff-entry-old entry))
-                (new-element (typst-overlay-diff-entry-new entry))
-                (record (typst-overlay--get-record registry old-element))
-                (artifact (and record
-                               (typst-overlay-record-artifact record))))
-           (unless (typst-overlay--artifact-reusable-p record new-element artifact)
-             (push (make-typst-overlay-render-op
-                    :old old-element
-                    :new new-element)
-                   ops))))
-
-        ('added
-         (let* ((new-element (typst-overlay-diff-entry-new entry))
-                (cache-key (typst-overlay-element-cache-key new-element))
-                (artifact (gethash cache-key artifact-cache)))
-           (unless (typst-overlay--artifact-live-p artifact)
-             (push (make-typst-overlay-render-op
-                    :old nil
-                    :new new-element)
-                   ops))))))
-
-    (nreverse ops)))
+         (let ((artifact (gethash (typst-overlay-element-cache-key new-element)
+                                  artifact-cache)))
+           (if (typst-overlay--artifact-live-p artifact)
+               (place artifact)
+             (render))))))))
 
 (defun typst-overlay--get-record (registry element)
   "Return the record for ELEMENT in REGISTRY, or nil if none exists."
