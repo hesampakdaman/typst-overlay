@@ -426,13 +426,8 @@ no equation is to blame, such as for an error in code."
   (let ((text (save-restriction
                 (widen)
                 (buffer-substring-no-properties (point-min) (point-max)))))
-    (unless (buffer-live-p typst-overlay--repair-buffer)
-      (setq typst-overlay--repair-buffer
-            (generate-new-buffer " *typst-overlay-repair*" t))
-      (with-current-buffer typst-overlay--repair-buffer
-        (buffer-disable-undo)
-        (treesit-parser-create 'typst)))
-    (with-current-buffer typst-overlay--repair-buffer
+    (with-current-buffer (typst-overlay--parse-buffer
+                          'typst-overlay--repair-buffer " *typst-overlay-repair*")
       (erase-buffer)
       (insert text)
       (let (broken span)
@@ -554,15 +549,15 @@ The paragraph ends at the next blank line or org heading."
 Reusing one buffer and parser is several times faster than
 `treesit-parse-string', which creates both on every call.")
 
-(defun typst-overlay--math-parse-buffer ()
-  "Return the hidden Typst parse buffer, creating it if needed."
-  (unless (buffer-live-p typst-overlay--math-parse-buffer)
-    (setq typst-overlay--math-parse-buffer
-          (generate-new-buffer " *typst-overlay-parse*" t))
-    (with-current-buffer typst-overlay--math-parse-buffer
+(defun typst-overlay--parse-buffer (var name)
+  "Return the hidden Typst buffer kept in VAR, creating it if needed.
+A new one is named NAME and has a Typst parser."
+  (unless (buffer-live-p (symbol-value var))
+    (set var (generate-new-buffer name t))
+    (with-current-buffer (symbol-value var)
       (buffer-disable-undo)
       (treesit-parser-create 'typst)))
-  typst-overlay--math-parse-buffer)
+  (symbol-value var))
 
 (defun typst-overlay--math-end (beg limit)
   "Return the end of the Typst math starting at BEG, or nil.
@@ -571,7 +566,8 @@ grammar, so nested math such as $#table($x$)$ is handled.  Return
 nil if no math starts at BEG, or it does not parse cleanly or swallowed
 a $, see `typst-overlay--swallowed-dollar'."
   (let ((text (buffer-substring-no-properties beg limit)))
-    (with-current-buffer (typst-overlay--math-parse-buffer)
+    (with-current-buffer (typst-overlay--parse-buffer
+                          'typst-overlay--math-parse-buffer " *typst-overlay-parse*")
       (erase-buffer)
       (insert text)
       (let ((node (treesit-node-descendant-for-range
@@ -2138,12 +2134,10 @@ put point where they meant to."
     (when (and typst-overlay--last-point
                (memq this-command typst-overlay--line-up-commands)
                (< curr-point typst-overlay--last-point)) ; Moving upwards
-      (let* ((overlays (overlays-at curr-point))
-             (typst-ov (cl-find-if (lambda (o) (overlay-get o 'typst-overlay)) overlays)))
-        (when typst-ov
-          (unless (and (>= typst-overlay--last-point (overlay-start typst-ov))
-                       (<= typst-overlay--last-point (overlay-end typst-ov)))
-            (goto-char (1- (overlay-end typst-ov)))))))
+      (when-let* ((typst-ov (typst-overlay--overlay-at-point)))
+        (unless (and (>= typst-overlay--last-point (overlay-start typst-ov))
+                     (<= typst-overlay--last-point (overlay-end typst-ov)))
+          (goto-char (1- (overlay-end typst-ov))))))
     (setq typst-overlay--last-point curr-point)))
 
 (defun typst-overlay--missing-requirement ()
