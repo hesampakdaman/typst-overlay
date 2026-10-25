@@ -68,3 +68,25 @@ jobs:
         run: |
           out=$(emacs --batch -Q --eval '(checkdoc-file "typst-overlay.el")' 2>&1)
           if [ -n "$out" ]; then echo "$out"; exit 1; fi
+
+  # The checks MELPA runs on a package before accepting it.
+  melpazoid:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Install melpazoid
+        run: git clone --quiet https://github.com/riscy/melpazoid.git ~/melpazoid
+
+      - name: melpazoid
+        env:
+          LOCAL_REPO: ${{ github.workspace }}
+          RECIPE: (typst-overlay :fetcher github :repo "hesampakdaman/typst-overlay")
+          WARN_IS_ERROR: true
+          # Not on MELPA yet.
+          EXIST_OK: false
+        run: make -C ~/melpazoid
