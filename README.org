@@ -1,7 +1,7 @@
 #+title: typst-overlay
 #+author: Hesam Pakdaman
 
-[[file:images/demo.gif]]
+[[file:images/editing.gif]]
 
 Render Typst math equations as inline overlays in Emacs. Equations are asynchronously compiled to SVG using the =typst= compiler and displayed on top of the source text. Overlays are visible when the cursor is outside the equation and hidden when the cursor moves inside, revealing the raw source for editing. Inline equations sit on the baseline of the text around them, like the math in a typeset document.
 
@@ -35,6 +35,10 @@ To render math in org buffers too, add =(org-mode . typst-overlay-mode)= and =(o
 ** Usage
 Enable the minor mode with =M-x typst-overlay-mode=, or with a hook as above, and the buffer's equations are rendered. Editing an equation removes its overlay, and it is rendered again once you stop typing for =typst-overlay-idle-refresh-delay= seconds. To refresh only when you ask, set that option to =nil= and run =M-x typst-overlay-refresh=, or add =typst-overlay-save-refresh= to =after-save-hook= to refresh on save.
 
+Equations are drawn in the color of the text around them, so they follow your theme, light or dark, without being compiled again:
+
+[[file:images/themes.png]]
+
 While point is inside an equation you see its source, with its image beside it in a thin box (face =typst-overlay-preview=):
 
 #+BEGIN_HTML
@@ -48,10 +52,6 @@ Equations that fail to render get a dotted red underline (face =typst-overlay-er
 #+BEGIN_HTML
 <p align="center"><img src="images/errors.png" width="396" alt="An equation that fails to compile, with its error below it"></p>
 #+END_HTML
-
-Equations are drawn in the color of the text around them, so they follow your theme, light or dark, without being compiled again:
-
-[[file:images/themes.png]]
 
 =M-x typst-overlay-version= shows the version you have, from the =Version:= header of =typst-overlay.el=, which is that of the last release.
 
