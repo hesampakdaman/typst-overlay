@@ -807,11 +807,11 @@ The result is returned in document order."
     (nreverse result)))
 
 (defun typst-overlay--prelude-code-node-p (code-node)
-  "Return non-nil if CODE-NODE is a #let, #import or #include."
-  (let ((text (string-trim-left (typst-overlay-code-node-text code-node))))
-    (or (string-prefix-p "#let" text)
-        (string-prefix-p "#import" text)
-        (string-prefix-p "#include" text))))
+  "Return non-nil if CODE-NODE is a #let, #import or #include.
+Not a call of a function whose name starts with one, such as
+#lettuce, which would draw its content into every equation."
+  (string-match-p "\\`[ \t\n]*#\\(?:let\\|import\\|include\\)\\(?:[^[:alnum:]_-]\\|\\'\\)"
+                  (typst-overlay-code-node-text code-node)))
 
 (defun typst-overlay--make-snapshot (analysis)
   "Return a `typst-overlay-snapshot' built from ANALYSIS.

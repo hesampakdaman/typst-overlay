@@ -182,7 +182,10 @@ The case name is part of the compared value so failures show it."
      (("$k$" "#let k = 1") ("$k$" "")))
     ("top-level and block #let"
      "#let a = 1\n#box[#let b = 2\n$a + b$]"
-     (("$a + b$" "#let a = 1\n\n#let b = 2"))))
+     (("$a + b$" "#let a = 1\n\n#let b = 2")))
+    ("calls named like a keyword are not preludes"
+     "#let lettuce = 1\n#lettuce\n#importance\n#include-me\n$x$"
+     (("$x$" "#let lettuce = 1"))))
   "Prelude cases: (NAME INPUT ((EQUATION PRELUDE) ...)).")
 
 (ert-deftest typst-overlay-test-typst-prelude ()
