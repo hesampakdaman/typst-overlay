@@ -1998,10 +1998,12 @@ within the length Windows allows."
 (defun typst-overlay--mark-used (svg-path)
   "Mark the cached image SVG-PATH as used now, once a session.
 Its modification time is set to now, so it is kept by
-`typst-overlay--prune-cache'."
+`typst-overlay--prune-cache'.  A cache that cannot be written to is
+left as it is."
   (unless (gethash svg-path typst-overlay--used-images)
     (puthash svg-path t typst-overlay--used-images)
-    (ignore-errors (set-file-times svg-path))))
+    (when (file-writable-p svg-path)
+      (set-file-times svg-path))))
 
 (defconst typst-overlay--cache-image-regexp "\\`[0-9a-f]\\{32\\}\\.svg\\'"
   "Regexp matching the name of a cached image, its cache key.")
@@ -2021,19 +2023,21 @@ Its modification time is set to now, so it is kept by
   "Delete the cached images not used in `typst-overlay-cache-max-age' days.
 Cache folders left empty are deleted too.  Only files and folders
 named as the cache names them are touched, so nothing else in
-`typst-overlay-cache-directory' is deleted, whatever it is set to."
+`typst-overlay-cache-directory' is deleted, whatever it is set to.
+Folders that cannot be written to are left as they are."
   (when (and typst-overlay-cache-max-age
              (file-directory-p typst-overlay-cache-directory))
     (let ((limit (time-subtract nil (days-to-time typst-overlay-cache-max-age))))
       (dolist (folder (directory-files typst-overlay-cache-directory t
                                        "\\`\\(?:!\\|[0-9a-f]\\{32\\}\\'\\)"))
-        (when (file-directory-p folder)
+        (when (and (file-directory-p folder) (file-writable-p folder))
           (dolist (file (directory-files folder t typst-overlay--cache-image-regexp))
             (when (time-less-p (file-attribute-modification-time (file-attributes file))
                                limit)
-              (ignore-errors (delete-file file))))
-          (when (directory-empty-p folder)
-            (ignore-errors (delete-directory folder))))))))
+              (delete-file file)))
+          (when (and (directory-empty-p folder)
+                     (file-writable-p typst-overlay-cache-directory))
+            (delete-directory folder)))))))
 
 (defun typst-overlay--invalidate-overlays-past-error (first-error)
   "Delete all overlays starting at or after FIRST-ERROR position."
