@@ -69,6 +69,12 @@ Each equation is compiled with the =#let=, =#import= and =#include= code before 
 
 Other blocks, such as =#+begin_src typst=, are left out, and so is other code in the export blocks, such as =#set= rules, which would change how every equation is drawn. Org passes an export block through only to the exporter it names, so an exporter to Typst puts these definitions in the document, and other exporters leave them out.
 
+=C-c '= opens a block in =typst-mode=, the mode org expects for Typst. To edit it in =typst-ts-mode= instead, with its equations rendered by the hook above, and to highlight Typst src blocks with it:
+#+begin_src emacs-lisp
+  (with-eval-after-load 'org-src
+    (add-to-list 'org-src-lang-modes '("typst" . typst-ts)))
+#+end_src
+
 Code for every buffer, such as =#set= and =#show= rules, goes in =typst-overlay-extra-prelude=, which can also be set per project in =.dir-locals.el=.
 
 ** Cache
