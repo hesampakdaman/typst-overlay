@@ -5,12 +5,6 @@
 
 Render Typst math equations as inline overlays in Emacs. Equations are asynchronously compiled to SVG using the =typst= compiler and displayed on top of the source text. Overlays are visible when the cursor is outside the equation and hidden when the cursor moves inside, revealing the raw source for editing. Inline equations sit on the baseline of the text around them, like the math in a typeset document.
 
-Equations that fail to render get a dotted red underline (face =typst-overlay-error=); move point into one, or hover over it, to see the error. They can also be reported to Flymake (see below), which on Emacs 31 or later can show the error under the equation, here with =flymake-show-diagnostics-at-end-of-line= set to =fancy=:
-
-#+BEGIN_HTML
-<img src="errors.png" width="306" alt="An equation that fails to compile, with its error below it">
-#+END_HTML
-
 ** Supported modes
 - =org-mode= — renders =$...$= as Typst math, following Typst's rules: =$x$= is inline and =$ x $= is display. Math may nest, as in =$#table($x$)$=. Write =\$= for a literal dollar sign. Math may span lines within a paragraph, and is ignored in code, verbatim and src blocks.
 - =typst-ts-mode= — renders all math equations in Typst documents
@@ -48,6 +42,12 @@ While point is inside an equation you see its source, with its image beside it i
 #+END_HTML
 
 If the equation spans lines, the image is shown below it instead. It keeps up as you type, and goes away when point leaves the equation. Set =typst-overlay-preview= to =nil= to turn it off.
+
+Equations that fail to render get a dotted red underline (face =typst-overlay-error=); move point into one, or hover over it, to see the error. They can also be reported to Flymake (see below), which on Emacs 31 or later can show the error under the equation, here with =flymake-show-diagnostics-at-end-of-line= set to =fancy=:
+
+#+BEGIN_HTML
+<img src="errors.png" width="396" alt="An equation that fails to compile, with its error below it">
+#+END_HTML
 
 Equations are drawn in the color of the text around them, so they follow your theme, light or dark, without being compiled again:
 
