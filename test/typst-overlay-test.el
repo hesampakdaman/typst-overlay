@@ -383,7 +383,7 @@ Return the `user-error' message and whether the mode stayed on."
                                (make-typst-overlay-math-node
                                 :beg 1 :end 4 :text "$a$" :text-hash (md5 "$a$"))
                                (list (make-typst-overlay-code-node
-                                      :beg 1 :end 2 :text "#let f = 2" :hash ""))))
+                                      :beg 1 :end 2 :text "#let f = 2"))))
                     (make-typst-overlay-job
                      :element (typst-overlay-test--element 10 "$\nb\n$")))))
     (pcase-let* ((`(,source . ,lines) (typst-overlay--batch-source jobs))
@@ -444,8 +444,7 @@ Return the `user-error' message and whether the mode stayed on."
                                 (make-typst-overlay-math-node
                                  :beg 30 :end 33 :text "$a$" :text-hash (md5 "$a$"))
                                 (list (make-typst-overlay-code-node
-                                       :beg 1 :end 28 :text "#import \"../common.typ\": a"
-                                       :hash "")))
+                                       :beg 1 :end 28 :text "#import \"../common.typ\": a")))
                       :svg-path (expand-file-name "a.svg" root)))
                nil (current-buffer) typst-overlay--session)
               (set-buffer-modified-p nil)))
@@ -457,7 +456,7 @@ Return the `user-error' message and whether the mode stayed on."
   "An error is traced to its job, or to every job sharing a prelude."
   (let* ((typst-overlay-extra-prelude "")
          (shared (list (make-typst-overlay-code-node
-                        :beg 1 :end 2 :text "#let f = 2" :hash "")))
+                        :beg 1 :end 2 :text "#let f = 2")))
          (make (lambda (beg text prelude)
                  (make-typst-overlay-job
                   :element (typst-overlay--make-element

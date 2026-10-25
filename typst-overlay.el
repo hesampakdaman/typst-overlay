@@ -227,20 +227,17 @@ Should return a `typst-overlay-analysis' struct.")
   beg
   end
   text
-  hash
   scope)  ;; (BEG . END) of the content block it is in, or nil at top level
 
 (defun typst-overlay--make-code-node (node &optional scope)
   "Return a `typst-overlay-code-node' for the tree-sitter NODE.
 SCOPE is the tree-sitter `content' node NODE is in, if any."
-  (let* ((beg (treesit-node-start node))
-         (end (treesit-node-end node))
-         (text (buffer-substring-no-properties beg end)))
+  (let ((beg (treesit-node-start node))
+        (end (treesit-node-end node)))
     (make-typst-overlay-code-node
      :beg beg
      :end end
-     :text text
-     :hash (md5 text)
+     :text (buffer-substring-no-properties beg end)
      :scope (and scope (cons (treesit-node-start scope)
                              (treesit-node-end scope))))))
 
@@ -278,29 +275,22 @@ returned in document order."
           (push (typst-overlay--make-code-node node parent) result))))
     (nreverse result)))
 
-(defun typst-overlay--sort-code-nodes (nodes)
-  "Sort code NODES by buffer position."
-  (sort nodes
-        (lambda (a b)
-          (< (typst-overlay-code-node-beg a)
-             (typst-overlay-code-node-beg b)))))
-
 (cl-defstruct typst-overlay-math-node
   beg
   end
   text
   text-hash)
 
+(defun typst-overlay--span-math-node (beg end)
+  "Return a math node for the text from BEG to END."
+  (let ((text (buffer-substring-no-properties beg end)))
+    (make-typst-overlay-math-node :beg beg :end end
+                                  :text text :text-hash (md5 text))))
+
 (defun typst-overlay--make-math-node (node)
   "Return a `typst-overlay-math-node' for the tree-sitter NODE."
-  (let* ((beg (treesit-node-start node))
-         (end (treesit-node-end node))
-         (text (buffer-substring-no-properties beg end)))
-    (make-typst-overlay-math-node
-     :beg beg
-     :end end
-     :text text
-     :text-hash (md5 text))))
+  (typst-overlay--span-math-node (treesit-node-start node)
+                                 (treesit-node-end node)))
 
 (defun typst-overlay--collect-math-nodes (captures first-error)
   "Collect math nodes that should be rendered (i.e. in content, not code).
@@ -409,20 +399,13 @@ so they are compiled and underlined with their error."
          (captures (if repair (typst-overlay--query-nodes root) captures))
          (first-error (if repair (typst-overlay--first-error root) first-error)))
     (make-typst-overlay-analysis
-     :code-nodes (typst-overlay--sort-code-nodes
-                  (typst-overlay--collect-code-nodes captures))
+     :code-nodes (typst-overlay--collect-code-nodes captures)
      :math-nodes (typst-overlay--sort-math-nodes
                   (nconc (typst-overlay--collect-math-nodes captures first-error)
                          (mapcar (pcase-lambda (`(,beg . ,end))
                                    (typst-overlay--span-math-node beg end))
                                  (cdr repair))))
      :first-error first-error)))
-
-(defun typst-overlay--span-math-node (beg end)
-  "Return a math node for the text from BEG to END."
-  (let ((text (buffer-substring-no-properties beg end)))
-    (make-typst-overlay-math-node :beg beg :end end
-                                  :text text :text-hash (md5 text))))
 
 (defvar typst-overlay--repair-buffer nil
   "Hidden buffer holding a copy of a Typst buffer being repaired.")
@@ -651,13 +634,8 @@ that prose like \"$5 and $10\" is left alone."
                    (not (memq (char-after end)
                               '(?0 ?1 ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9)))
                    (not (typst-overlay--org-in-code-p beg)))
-              (let ((text (buffer-substring-no-properties beg end)))
-                (push (make-typst-overlay-math-node
-                       :beg beg
-                       :end end
-                       :text text
-                       :text-hash (md5 text))
-                      math-nodes)
+              (progn
+                (push (typst-overlay--span-math-node beg end) math-nodes)
                 (goto-char end))
             ;; Not math: treat the opening $ as literal and move on.
             (goto-char (1+ beg))))))
@@ -785,9 +763,7 @@ Relative #import paths are from there."
   (mapconcat #'typst-overlay-code-node-text code-nodes "\n\n"))
 
 (cl-defstruct typst-overlay-snapshot
-  elements       ;; ordered list of typst-overlay-element
-  code-nodes
-  math-nodes)
+  elements)      ;; ordered list of typst-overlay-element
 
 (defun typst-overlay--collect-prelude-code-nodes (math-node code-nodes)
   "Return the CODE-NODES that are in MATH-NODE's prelude.
@@ -831,10 +807,7 @@ Each math node becomes an element paired with its prelude code."
               (typst-overlay--make-element
                math-node prelude-nodes preludes)))
         (push element elements)))
-    (make-typst-overlay-snapshot
-     :elements (nreverse elements)
-     :code-nodes code-nodes
-     :math-nodes math-nodes)))
+    (make-typst-overlay-snapshot :elements (nreverse elements))))
 
 ;; differ
 (cl-defstruct typst-overlay-diff-entry
@@ -2138,13 +2111,6 @@ named as the cache names them are touched, so nothing else in
      (typst-overlay-registry-records typst-overlay--registry))))
 
 ;; loop
-(defun typst-overlay--empty-snapshot ()
-  "Return an empty snapshot."
-  (make-typst-overlay-snapshot
-   :elements nil
-   :code-nodes nil
-   :math-nodes nil))
-
 (defun typst-overlay-refresh ()
   "Refresh Typst overlays for the current buffer."
   (interactive)
@@ -2152,7 +2118,7 @@ named as the cache names them are touched, so nothing else in
     (user-error "Mode typst-overlay-mode not active"))
   (typst-overlay--ensure-runtime)
   (let* ((old-snapshot (or typst-overlay--snapshot
-                           (typst-overlay--empty-snapshot)))
+                           (make-typst-overlay-snapshot)))
          ;; The whole buffer, even when narrowed, or every equation
          ;; outside the narrowing would lose its overlay.
          (analysis (save-restriction
