@@ -245,14 +245,17 @@ Return the `user-error' message and whether the mode stayed on."
 
 ;;; Elements
 
-(defun typst-overlay-test--element (beg text)
-  "Return an element for TEXT starting at BEG, with no prelude."
+(defun typst-overlay-test--element (beg text &optional prelude)
+  "Return an element for TEXT starting at BEG.
+PRELUDE, if non-nil, is the code of its prelude."
   (typst-overlay--make-element
    (make-typst-overlay-math-node :beg beg
                                  :end (+ beg (length text))
                                  :text text
                                  :text-hash (md5 text))
-   nil))
+   (and prelude
+        (list (make-typst-overlay-code-node :beg 1 :end (1+ (length prelude))
+                                            :text prelude)))))
 
 ;;; Async placement
 
@@ -313,7 +316,7 @@ Return the `user-error' message and whether the mode stayed on."
       (should (equal (list name expected)
                      (list name (typst-overlay--compile-error-summary output)))))))
 
-(defun typst-overlay-test--failed-record (element generation)
+(defun typst-overlay-test--rendering-registry (element generation)
   "Return a registry holding a rendering record for ELEMENT at GENERATION."
   (let ((registry (typst-overlay--make-registry)))
     (typst-overlay--put-record
@@ -329,7 +332,7 @@ Return the `user-error' message and whether the mode stayed on."
     (setq-local typst-overlay-mode t)
     (let ((element (typst-overlay-test--element 5 "$ac$")))
       ;; Current generation: marked failed and underlined.
-      (setq typst-overlay--registry (typst-overlay-test--failed-record element 1))
+      (setq typst-overlay--registry (typst-overlay-test--rendering-registry element 1))
       (typst-overlay--handle-render-failure
        element element 1 "unknown variable: ac")
       (let* ((record (typst-overlay--get-record typst-overlay--registry element))
@@ -342,12 +345,12 @@ Return the `user-error' message and whether the mode stayed on."
                        "unknown variable: ac")))
       ;; Text changed while compiling: failed, but nothing to underline.
       (remove-overlays)
-      (setq typst-overlay--registry (typst-overlay-test--failed-record element 1))
+      (setq typst-overlay--registry (typst-overlay-test--rendering-registry element 1))
       (typst-overlay--handle-render-failure element nil 1 "x")
       (should-not (typst-overlay-record-overlay
                    (typst-overlay--get-record typst-overlay--registry element)))
       ;; Outdated generation: left alone.
-      (setq typst-overlay--registry (typst-overlay-test--failed-record element 2))
+      (setq typst-overlay--registry (typst-overlay-test--rendering-registry element 2))
       (typst-overlay--handle-render-failure element element 1 "x")
       (should (eq (typst-overlay-record-state
                    (typst-overlay--get-record typst-overlay--registry element))
@@ -379,11 +382,7 @@ Return the `user-error' message and whether the mode stayed on."
   "Each job's recorded lines match its block in the batch source."
   (let ((typst-overlay-extra-prelude "#let k = 1")
         (jobs (list (make-typst-overlay-job
-                     :element (typst-overlay--make-element
-                               (make-typst-overlay-math-node
-                                :beg 1 :end 4 :text "$a$" :text-hash (md5 "$a$"))
-                               (list (make-typst-overlay-code-node
-                                      :beg 1 :end 2 :text "#let f = 2"))))
+                     :element (typst-overlay-test--element 1 "$a$" "#let f = 2"))
                     (make-typst-overlay-job
                      :element (typst-overlay-test--element 10 "$\nb\n$")))))
     (pcase-let* ((`(,source . ,lines) (typst-overlay--batch-source jobs))
@@ -440,11 +439,8 @@ Return the `user-error' message and whether the mode stayed on."
               (setq buffer-file-name (expand-file-name "main.typ" sub))
               (typst-overlay--run-batch
                (list (make-typst-overlay-job
-                      :element (typst-overlay--make-element
-                                (make-typst-overlay-math-node
-                                 :beg 30 :end 33 :text "$a$" :text-hash (md5 "$a$"))
-                                (list (make-typst-overlay-code-node
-                                       :beg 1 :end 28 :text "#import \"../common.typ\": a")))
+                      :element (typst-overlay-test--element
+                                30 "$a$" "#import \"../common.typ\": a")
                       :svg-path (expand-file-name "a.svg" root)))
                nil (current-buffer) typst-overlay--session)
               (set-buffer-modified-p nil)))
@@ -455,19 +451,13 @@ Return the `user-error' message and whether the mode stayed on."
 (ert-deftest typst-overlay-test-failed-jobs ()
   "An error is traced to its job, or to every job sharing a prelude."
   (let* ((typst-overlay-extra-prelude "")
-         (shared (list (make-typst-overlay-code-node
-                        :beg 1 :end 2 :text "#let f = 2")))
-         (make (lambda (beg text prelude)
+         (make (lambda (beg text &optional prelude)
                  (make-typst-overlay-job
-                  :element (typst-overlay--make-element
-                            (make-typst-overlay-math-node
-                             :beg beg :end (+ beg (length text))
-                             :text text :text-hash (md5 text))
-                            prelude))))
-         (jobs (list (funcall make 1 "$a$" nil)
-                     (funcall make 10 "$b$" nil)
-                     (funcall make 20 "$c$" shared)
-                     (funcall make 30 "$d$" shared)))
+                  :element (typst-overlay-test--element beg text prelude))))
+         (jobs (list (funcall make 1 "$a$")
+                     (funcall make 10 "$b$")
+                     (funcall make 20 "$c$" "#let f = 2")
+                     (funcall make 30 "$d$" "#let f = 2")))
          (lines (cdr (typst-overlay--batch-source jobs))))
     (cl-flet ((failed (job-index field)
                 (mapcar (lambda (job)
@@ -501,14 +491,6 @@ Return the `user-error' message and whether the mode stayed on."
     (should-not (typst-overlay--job-error
                  errors (make-typst-overlay-job-lines :beg 13 :prelude-end 13 :end 15)))))
 
-(defun typst-overlay-test--page-count (source)
-  "Return how many pages SOURCE produces."
-  (let ((count 1) (start 0))
-    (while (string-match "^#pagebreak()$" source start)
-      (cl-incf count)
-      (setq start (match-end 0)))
-    count))
-
 (defun typst-overlay-test--error-at (marker message)
   "Return a fake typst that fails at the first line containing MARKER.
 MESSAGE is the error it reports there."
@@ -525,6 +507,10 @@ MESSAGE is the error it reports there."
       (push (match-string 1 source) equations)
       (setq start (match-end 0)))
     (nreverse equations)))
+
+(defun typst-overlay-test--page-count (source)
+  "Return how many pages batch SOURCE produces, one per equation."
+  (length (typst-overlay-test--source-equations source)))
 
 (defmacro typst-overlay-test--with-batches (text behavior &rest body)
   "Enable the mode on an org file with TEXT, compiling with a fake typst.
@@ -589,14 +575,18 @@ and `compiled' the equations compiled, in order."
   (mapconcat (lambda (i) (format "Line $x_%d$ here." i))
              (number-sequence 1 n) "\n"))
 
+(defun typst-overlay-test--overlay-list (property)
+  "Return the overlays with PROPERTY, in buffer order."
+  (sort (seq-filter (lambda (overlay) (overlay-get overlay property))
+                    (overlays-in (point-min) (point-max)))
+        (lambda (a b) (< (overlay-start a) (overlay-start b)))))
+
 (defun typst-overlay-test--overlays (property)
   "Return the texts covered by overlays with PROPERTY, in order."
   (mapcar (lambda (overlay)
             (buffer-substring-no-properties (overlay-start overlay)
                                             (overlay-end overlay)))
-          (sort (seq-filter (lambda (overlay) (overlay-get overlay property))
-                            (overlays-in (point-min) (point-max)))
-                (lambda (a b) (< (overlay-start a) (overlay-start b))))))
+          (typst-overlay-test--overlay-list property)))
 
 (ert-deftest typst-overlay-test-batch-split ()
   "Equations are spread evenly over at most the compile limit."
@@ -838,9 +828,7 @@ See `typst-overlay-test--edit-cases'."
   (skip-unless (treesit-language-available-p 'typst))
   (typst-overlay-test--with-batches "$a$ and $b$, $c$" #'ignore
     (run-compiles)
-    (cl-flet ((overlays ()
-                (seq-filter (lambda (overlay) (overlay-get overlay 'typst-overlay))
-                            (overlays-in (point-min) (point-max)))))
+    (cl-flet ((overlays () (typst-overlay-test--overlay-list 'typst-overlay)))
       (let ((before (overlays))
             (reads 0))
         (cl-letf* ((read-svg (symbol-function 'typst-overlay--read-svg))
@@ -862,8 +850,7 @@ See `typst-overlay-test--edit-cases'."
   (skip-unless (treesit-language-available-p 'typst))
   (typst-overlay-test--with-batches "Text $a$ end." #'ignore
     (run-compiles)
-    (let ((overlay (car (seq-filter (lambda (overlay) (overlay-get overlay 'typst-overlay))
-                                    (overlays-in (point-min) (point-max))))))
+    (let ((overlay (car (typst-overlay-test--overlay-list 'typst-overlay))))
       (goto-char (point-max))
       (typst-overlay--post-command-update)
       (should (eq (overlay-get overlay 'face) 'typst-overlay-equation))
@@ -1001,41 +988,41 @@ no preview."
   "Failed equations are reported to Flymake, and still marked as failed."
   (skip-unless (treesit-language-available-p 'typst))
   (let ((typst-overlay-use-flymake t))
-   (typst-overlay-test--with-batches
-      (replace-regexp-in-string "x_2" "BAD" (typst-overlay-test--equations 3))
-      (typst-overlay-test--error-at "BAD" "unknown variable: BAD")
-    (cl-flet ((diagnostics ()
-                (mapcar (lambda (diag)
-                          (list (buffer-substring-no-properties
-                                 (flymake-diagnostic-beg diag)
-                                 (flymake-diagnostic-end diag))
-                                ;; Flymake 1.4 and later add the
-                                ;; origin to the text.
-                                (if (fboundp 'flymake-diagnostic-message)
-                                    (flymake-diagnostic-message diag)
-                                  (flymake-diagnostic-text diag))))
-                        (flymake-diagnostics)))
-              (error-face ()
-                (overlay-get (car (typst-overlay--error-overlays)) 'face)))
-      (should (memq #'typst-overlay-flymake flymake-diagnostic-functions))
-      ;; Newer Flymake only runs backends marked safe in untrusted buffers.
-      (should (function-get 'typst-overlay-flymake 'flymake-always-safe))
-      (flymake-mode 1)
-      (flymake-start)
-      ;; Errors from compiles finishing after the check are reported.
-      (should-not (diagnostics))
-      (run-compiles)
-      (should (equal (diagnostics) '(("$BAD$" "unknown variable: BAD"))))
-      (should (eq (error-face) 'typst-overlay-error))
-      (flymake-mode -1)
-      (flymake-mode 1)
-      (flymake-start)
-      (should (equal (diagnostics) '(("$BAD$" "unknown variable: BAD"))))
-      ;; Turning the mode off clears its diagnostics.
-      (typst-overlay-mode -1)
-      (should-not (diagnostics))
-      (should-not (memq #'typst-overlay-flymake flymake-diagnostic-functions))
-      (flymake-mode -1)))))
+    (typst-overlay-test--with-batches
+        (replace-regexp-in-string "x_2" "BAD" (typst-overlay-test--equations 3))
+        (typst-overlay-test--error-at "BAD" "unknown variable: BAD")
+      (cl-flet ((diagnostics ()
+                  (mapcar (lambda (diag)
+                            (list (buffer-substring-no-properties
+                                   (flymake-diagnostic-beg diag)
+                                   (flymake-diagnostic-end diag))
+                                  ;; Flymake 1.4 and later add the
+                                  ;; origin to the text.
+                                  (if (fboundp 'flymake-diagnostic-message)
+                                      (flymake-diagnostic-message diag)
+                                    (flymake-diagnostic-text diag))))
+                          (flymake-diagnostics)))
+                (error-face ()
+                  (overlay-get (car (typst-overlay--error-overlays)) 'face)))
+        (should (memq #'typst-overlay-flymake flymake-diagnostic-functions))
+        ;; Newer Flymake only runs backends marked safe in untrusted buffers.
+        (should (function-get 'typst-overlay-flymake 'flymake-always-safe))
+        (flymake-mode 1)
+        (flymake-start)
+        ;; Errors from compiles finishing after the check are reported.
+        (should-not (diagnostics))
+        (run-compiles)
+        (should (equal (diagnostics) '(("$BAD$" "unknown variable: BAD"))))
+        (should (eq (error-face) 'typst-overlay-error))
+        (flymake-mode -1)
+        (flymake-mode 1)
+        (flymake-start)
+        (should (equal (diagnostics) '(("$BAD$" "unknown variable: BAD"))))
+        ;; Turning the mode off clears its diagnostics.
+        (typst-overlay-mode -1)
+        (should-not (diagnostics))
+        (should-not (memq #'typst-overlay-flymake flymake-diagnostic-functions))
+        (flymake-mode -1)))))
 
 (ert-deftest typst-overlay-test-flymake-opt-in ()
   "The backend is added where `typst-overlay-use-flymake' applies.
@@ -1061,38 +1048,38 @@ This holds whether Eglot starts before or after the mode."
   (let ((typst-overlay-use-flymake t)
         (managed nil)
         saved)
-   ;; Eglot says so while it manages the buffer, as 0.5.0 relied on.
-   (cl-letf (((symbol-function 'eglot-managed-p) (lambda () managed)))
-    (cl-flet ((eglot-on ()
-                ;; What Eglot does when it starts managing the buffer.
-                (setq managed t
-                      saved flymake-diagnostic-functions)
-                (setq-local flymake-diagnostic-functions '(eglot-flymake-backend))
-                (run-hooks 'eglot-managed-mode-hook))
-              (eglot-off ()
-                (setq managed nil)
-                (setq-local flymake-diagnostic-functions saved)
-                (run-hooks 'eglot-managed-mode-hook)))
-      ;; Eglot starts after the mode.
-      (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
-        (should (equal flymake-diagnostic-functions '(typst-overlay-flymake t)))
-        (eglot-on)
-        (should (equal flymake-diagnostic-functions
-                       '(typst-overlay-flymake eglot-flymake-backend)))
-        (eglot-off)
-        (should (equal flymake-diagnostic-functions '(typst-overlay-flymake t))))
-      ;; Eglot starts before the mode.
-      (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
-        (typst-overlay-mode -1)
-        (eglot-on)
-        (typst-overlay-mode 1)
-        (should (equal flymake-diagnostic-functions
-                       '(typst-overlay-flymake eglot-flymake-backend)))
-        (eglot-off)
-        (should (memq #'typst-overlay-flymake flymake-diagnostic-functions))
-        (typst-overlay-mode -1)
-        (should-not (memq #'typst-overlay--add-flymake-backend
-                          eglot-managed-mode-hook)))))))
+    ;; Eglot says so while it manages the buffer, as 0.5.0 relied on.
+    (cl-letf (((symbol-function 'eglot-managed-p) (lambda () managed)))
+      (cl-flet ((eglot-on ()
+                  ;; What Eglot does when it starts managing the buffer.
+                  (setq managed t
+                        saved flymake-diagnostic-functions)
+                  (setq-local flymake-diagnostic-functions '(eglot-flymake-backend))
+                  (run-hooks 'eglot-managed-mode-hook))
+                (eglot-off ()
+                  (setq managed nil)
+                  (setq-local flymake-diagnostic-functions saved)
+                  (run-hooks 'eglot-managed-mode-hook)))
+        ;; Eglot starts after the mode.
+        (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
+          (should (equal flymake-diagnostic-functions '(typst-overlay-flymake t)))
+          (eglot-on)
+          (should (equal flymake-diagnostic-functions
+                         '(typst-overlay-flymake eglot-flymake-backend)))
+          (eglot-off)
+          (should (equal flymake-diagnostic-functions '(typst-overlay-flymake t))))
+        ;; Eglot starts before the mode.
+        (typst-overlay-test--with-batches (typst-overlay-test--equations 1) #'ignore
+          (typst-overlay-mode -1)
+          (eglot-on)
+          (typst-overlay-mode 1)
+          (should (equal flymake-diagnostic-functions
+                         '(typst-overlay-flymake eglot-flymake-backend)))
+          (eglot-off)
+          (should (memq #'typst-overlay-flymake flymake-diagnostic-functions))
+          (typst-overlay-mode -1)
+          (should-not (memq #'typst-overlay--add-flymake-backend
+                            eglot-managed-mode-hook)))))))
 
 (ert-deftest typst-overlay-test-cache-dir ()
   "Images are kept in a folder per file folder, in the cache directory."
@@ -1255,18 +1242,16 @@ This holds whether Eglot starts before or after the mode."
 
 (ert-deftest typst-overlay-test-font-cache-key ()
   "Font options change the cache key, but the defaults keep earlier keys."
-  (let* ((node (make-typst-overlay-math-node :beg 1 :end 4 :text "$x$"
-                                             :text-hash (md5 "$x$")))
+  (let* ((typst-overlay-extra-prelude "")
          (key (lambda () (typst-overlay-element-cache-key
-                          (typst-overlay--make-element node nil))))
-         (typst-overlay-extra-prelude ""))
-    (should (equal (funcall key)
-                   (md5 (concat (md5 "$x$") (md5 "") (md5 "")
-                                typst-overlay--render-version))))
+                          (typst-overlay-test--element 1 "$x$"))))
+         (default (funcall key)))
+    (should (equal default (md5 (concat (md5 "$x$") (md5 "") (md5 "")
+                                        typst-overlay--render-version))))
     (let ((typst-overlay-system-fonts t))
-      (should-not (equal (funcall key)
-                         (md5 (concat (md5 "$x$") (md5 "") (md5 "")
-                                      typst-overlay--render-version)))))))
+      (should-not (equal (funcall key) default)))
+    (let ((typst-overlay-font-paths '("/fonts")))
+      (should-not (equal (funcall key) default)))))
 
 (ert-deftest typst-overlay-test-unknown-font-warning ()
   "A font typst could not find is warned about once, unless system fonts are on."
@@ -1331,8 +1316,7 @@ EXPECTED is the size property the image is created with.")
         (while typst-overlay--resize-timer
           (accept-process-output nil 0.01))
         (cl-flet ((scale (image) (plist-get (cdr image) :scale)))
-          (dolist (overlay (seq-filter (lambda (ov) (overlay-get ov 'typst-overlay))
-                                       (overlays-in (point-min) (point-max))))
+          (dolist (overlay (typst-overlay-test--overlay-list 'typst-overlay))
             (should (equal (scale (overlay-get overlay 'typst-overlay-image)) 2.0))
             (when (overlay-get overlay 'display)
               (should (equal (scale (overlay-get overlay 'display)) 2.0))))
