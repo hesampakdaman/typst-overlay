@@ -3,7 +3,7 @@
 
 [[file:demo.gif]]
 
-Render Typst math equations as inline overlays in Emacs. Equations are asynchronously compiled to SVG using the =typst= compiler and displayed on top of the source text. Overlays are visible when the cursor is outside the equation and hidden when the cursor moves inside, revealing the raw source for editing. Inline equations sit on the baseline of the text around them, like the math in a typeset document. Equations are drawn in the color of the text around them, so they follow theme changes.
+Render Typst math equations as inline overlays in Emacs. Equations are asynchronously compiled to SVG using the =typst= compiler and displayed on top of the source text. Overlays are visible when the cursor is outside the equation and hidden when the cursor moves inside, revealing the raw source for editing. Inline equations sit on the baseline of the text around them, like the math in a typeset document.
 
 Equations that fail to render get a dotted red underline (face =typst-overlay-error=); move point into one, or hover over it, to see the error. They can also be reported to Flymake (see below).
 
@@ -40,6 +40,12 @@ To render math in org buffers too, add =(org-mode . typst-overlay-mode)= and =(o
 Enable the minor mode with =M-x typst-overlay-mode=, or with a hook as above, and the buffer's equations are rendered. Editing an equation removes its overlay, and it is rendered again once you stop typing for =typst-overlay-idle-refresh-delay= seconds. To refresh only when you ask, set that option to =nil= and run =M-x typst-overlay-refresh=, or add =typst-overlay-save-refresh= to =after-save-hook= to refresh on save.
 
 While point is inside an equation you see its source, and its image is shown beside it in a thin box (face =typst-overlay-preview=), or below it if the equation spans lines. The image keeps up as you type, and goes away when point leaves the equation. Set =typst-overlay-preview= to =nil= to turn it off.
+
+[[file:preview.png]]
+
+Equations are drawn in the color of the text around them, so they follow theme changes.
+
+[[file:themes.png]]
 
 =M-x typst-overlay-version= shows the version you have, from the =Version:= header of =typst-overlay.el=, which is that of the last release.
 
