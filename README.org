@@ -7,7 +7,9 @@ Render Typst math equations as inline overlays in Emacs. Equations are asynchron
 
 Equations that fail to render get a dotted red underline (face =typst-overlay-error=); move point into one, or hover over it, to see the error. They can also be reported to Flymake (see below).
 
-[[file:errors.png]]
+#+BEGIN_HTML
+<img src="errors.png" width="306" alt="An equation that fails to compile, with its error below it">
+#+END_HTML
 
 ** Supported modes
 - =org-mode= — renders =$...$= as Typst math, following Typst's rules: =$x$= is inline and =$ x $= is display. Math may nest, as in =$#table($x$)$=. Write =\$= for a literal dollar sign. Math may span lines within a paragraph, and is ignored in code, verbatim and src blocks.
@@ -41,7 +43,9 @@ Enable the minor mode with =M-x typst-overlay-mode=, or with a hook as above, an
 
 While point is inside an equation you see its source, and its image is shown beside it in a thin box (face =typst-overlay-preview=), or below it if the equation spans lines. The image keeps up as you type, and goes away when point leaves the equation. Set =typst-overlay-preview= to =nil= to turn it off.
 
-[[file:preview.png]]
+#+BEGIN_HTML
+<img src="preview.png" width="396" alt="An equation's source with its preview beside it">
+#+END_HTML
 
 Equations are drawn in the color of the text around them, so they follow theme changes.
 
