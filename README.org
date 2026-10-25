@@ -59,10 +59,10 @@ Equations that fail to render get a dotted red underline (face =typst-overlay-er
 Each equation is compiled with the =#let=, =#import= and =#include= code before it, as Typst would see it, so it can use the functions and variables defined there. In Typst buffers that is the code written before the equation, in its scope. In org buffers it is the code in the Typst export blocks before it:
 
 #+begin_src org
-  #+begin_export typst
+  ,#+begin_export typst
   #let bvec(x) = math.bold(x)
   #import "notation.typ": *
-  #+end_export
+  ,#+end_export
 
   The force $bvec(F) = m bvec(a)$ …
 #+end_src
