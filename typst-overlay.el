@@ -19,8 +19,9 @@
 ;; and restored when point leaves.
 ;;
 ;; Supported buffers: `typst-ts-mode' and `org-mode' (where $...$ is
-;; treated as Typst math).  Both use the Typst tree-sitter grammar to
-;; find equations.
+;; treated as Typst math, with the #let code of the Typst export
+;; blocks before it).  Both use the Typst tree-sitter grammar to find
+;; equations.
 ;;
 ;; Usage:
 ;;
@@ -44,7 +45,10 @@
 (require 'treesit)
 
 (declare-function org-element-context "org-element" (&optional element))
+(declare-function org-element-at-point "org-element" (&optional epom cached-only))
 (declare-function org-element-type "org-element-ast" (node &optional anonymous))
+(declare-function org-element-property "org-element-ast"
+                  (property node &optional dflt force-undefer))
 (declare-function flymake-make-diagnostic "flymake"
                   (locus beg end type text &optional data overlay-properties))
 (declare-function flymake-diagnostics "flymake" (&optional beg end))
@@ -595,6 +599,48 @@ Search from point."
       (unless (typst-overlay--escaped-p (1- (point)))
         (throw 'found (point))))))
 
+(defun typst-overlay--move-code-node (code-node offset)
+  "Move CODE-NODE, and its scope if it has one, by OFFSET characters."
+  (cl-incf (typst-overlay-code-node-beg code-node) offset)
+  (cl-incf (typst-overlay-code-node-end code-node) offset)
+  (when-let* ((scope (typst-overlay-code-node-scope code-node)))
+    (setf (typst-overlay-code-node-scope code-node)
+          (cons (+ (car scope) offset) (+ (cdr scope) offset))))
+  code-node)
+
+(defun typst-overlay--org-code-nodes ()
+  "Return the code nodes of the org buffer's Typst export blocks.
+Those are written between #+begin_export typst and #+end_export.
+Each block's contents are parsed with the Typst tree-sitter grammar,
+and their code nodes placed where they are in the buffer, so an
+equation gets the #let, #import and #include code of the blocks
+before it as its prelude, as in a Typst file."
+  (let ((case-fold-search t)
+        code-nodes)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^[ \t]*#\\+begin_export[ \t]+typst[ \t]*$" nil t)
+        (let ((element (org-element-at-point)))
+          (when (and (eq (org-element-type element) 'export-block)
+                     (equal (org-element-property :type element) "TYPST"))
+            (let* ((beg (line-beginning-position 2))
+                   (end (save-excursion
+                          (goto-char (org-element-property :end element))
+                          (re-search-backward "^[ \t]*#\\+end_export" beg t)))
+                   (text (and end (buffer-substring-no-properties beg end))))
+              (when text
+                (with-current-buffer (typst-overlay--parse-buffer
+                                      'typst-overlay--math-parse-buffer
+                                      " *typst-overlay-parse*")
+                  (erase-buffer)
+                  (insert text)
+                  (dolist (code-node (typst-overlay--collect-code-nodes
+                                      (typst-overlay--query-nodes
+                                       (treesit-buffer-root-node 'typst))))
+                    (push (typst-overlay--move-code-node code-node (1- beg))
+                          code-nodes)))))))))
+    (nreverse code-nodes)))
+
 (defun typst-overlay--analyze-org ()
   "Collect $...$ spans in an org buffer as Typst math.
 
@@ -614,7 +660,10 @@ Math may cross lines but not the end of a paragraph (a blank line
 or heading), so a stray dollar sign cannot swallow the rest of the
 buffer.  Spans in code, verbatim and src blocks are skipped, as are
 empty spans and spans whose closing $ is followed by a digit, so
-that prose like \"$5 and $10\" is left alone."
+that prose like \"$5 and $10\" is left alone.
+
+Preludes come from Typst export blocks, see
+`typst-overlay--org-code-nodes'."
   (let (math-nodes)
     (save-excursion
       (goto-char (point-min))
@@ -636,7 +685,7 @@ that prose like \"$5 and $10\" is left alone."
             ;; Not math: treat the opening $ as literal and move on.
             (goto-char (1+ beg))))))
     (make-typst-overlay-analysis
-     :code-nodes nil
+     :code-nodes (typst-overlay--org-code-nodes)
      :math-nodes (nreverse math-nodes)
      :first-error nil)))
 

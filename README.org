@@ -6,7 +6,7 @@
 Render Typst math equations as inline overlays in Emacs. Equations are asynchronously compiled to SVG using the =typst= compiler and displayed on top of the source text. Overlays are visible when the cursor is outside the equation and hidden when the cursor moves inside, revealing the raw source for editing. Inline equations sit on the baseline of the text around them, like the math in a typeset document.
 
 ** Supported modes
-- =org-mode= — renders =$...$= as Typst math, following Typst's rules: =$x$= is inline and =$ x $= is display. Math may nest, as in =$#table($x$)$=. Write =\$= for a literal dollar sign. Math may span lines within a paragraph, and is ignored in code, verbatim and src blocks.
+- =org-mode= — renders =$...$= as Typst math, following Typst's rules: =$x$= is inline and =$ x $= is display. Math may nest, as in =$#table($x$)$=. Write =\$= for a literal dollar sign. Math may span lines within a paragraph, and is ignored in code, verbatim and src blocks. Definitions go in Typst export blocks, see below.
 - =typst-ts-mode= — renders all math equations in Typst documents
 
 ** Requirements
@@ -54,6 +54,22 @@ Equations that fail to render get a dotted red underline (face =typst-overlay-er
 #+END_HTML
 
 =M-x typst-overlay-version= shows the version you have, from the =Version:= header of =typst-overlay.el=, which is that of the last release.
+
+** Definitions
+Each equation is compiled with the =#let=, =#import= and =#include= code before it, as Typst would see it, so it can use the functions and variables defined there. In Typst buffers that is the code written before the equation, in its scope. In org buffers it is the code in the Typst export blocks before it:
+
+#+begin_src org
+  #+begin_export typst
+  #let bvec(x) = math.bold(x)
+  #import "notation.typ": *
+  #+end_export
+
+  The force $bvec(F) = m bvec(a)$ …
+#+end_src
+
+Other blocks, such as =#+begin_src typst=, are left out, and so is other code in the export blocks, such as =#set= rules, which would change how every equation is drawn. Org passes an export block through only to the exporter it names, so an exporter to Typst puts these definitions in the document, and other exporters leave them out.
+
+Code for every buffer, such as =#set= and =#show= rules, goes in =typst-overlay-extra-prelude=, which can also be set per project in =.dir-locals.el=.
 
 ** Cache
 Rendered equations are saved as SVG files in =typst-overlay-cache-directory=, by default =~/.cache/typst-overlay/= (=~/Library/Caches/typst-overlay/= on macOS, =%LOCALAPPDATA%\typst-overlay\= on Windows), so reopening a file shows them without compiling again. Nothing is written next to your files. Each folder of files gets its own folder there, named after its path as for backup files: =/home/me/notes/= becomes =!home!me!notes!=. Buffers without a file, such as those of =org-capture=, use their own folder's. Images not shown for =typst-overlay-cache-max-age= days, 30 by default, are deleted, checked at most once a day while Emacs is idle; set it to =nil= to keep them. The directory, or a folder in it, is also safe to delete at any time, and equations are compiled again as needed.

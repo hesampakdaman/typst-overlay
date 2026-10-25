@@ -188,14 +188,13 @@ The case name is part of the compared value so failures show it."
      (("$x$" "#let lettuce = 1"))))
   "Prelude cases: (NAME INPUT ((EQUATION PRELUDE) ...)).")
 
-(ert-deftest typst-overlay-test-typst-prelude ()
-  "Each equation gets the #let code in scope before it as its prelude."
-  (skip-unless (treesit-language-available-p 'typst))
-  (dolist (case typst-overlay-test--prelude-cases)
+(defun typst-overlay-test--run-prelude-cases (setup cases)
+  "Check every prelude case in CASES, preparing each buffer with SETUP."
+  (dolist (case cases)
     (pcase-let ((`(,name ,input ,expected) case))
       (with-temp-buffer
         (insert input)
-        (typst-overlay-test--setup-typst)
+        (funcall setup)
         (let ((snapshot (typst-overlay--make-snapshot
                          (funcall typst-overlay--analyzer))))
           (should (equal (list name expected)
@@ -204,6 +203,36 @@ The case name is part of the compared value so failures show it."
                                          (list (typst-overlay-element-text element)
                                                (typst-overlay-element-prelude-text element)))
                                        (typst-overlay-snapshot-elements snapshot))))))))))
+
+(ert-deftest typst-overlay-test-typst-prelude ()
+  "Each equation gets the #let code in scope before it as its prelude."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--run-prelude-cases #'typst-overlay-test--setup-typst
+                                         typst-overlay-test--prelude-cases))
+
+(defconst typst-overlay-test--org-prelude-cases
+  '(("export block before an equation"
+     "#+begin_export typst\n#let k = 1\n#+end_export\n\n$k$"
+     (("$k$" "#let k = 1")))
+    ("export block after an equation"
+     "$k$\n\n#+begin_export typst\n#let k = 1\n#+end_export"
+     (("$k$" "")))
+    ("blocks add up, in any case"
+     "#+begin_export typst\n#let a = 1\n#+end_export\n\n$a$\n\n#+BEGIN_EXPORT typst\n#import \"n.typ\": *\n#+END_EXPORT\n\n$a$"
+     (("$a$" "#let a = 1") ("$a$" "#let a = 1\n\n#import \"n.typ\": *")))
+    ("only #let, #import and #include, at top level"
+     "#+begin_export typst\n#set text(red)\n#box[#let s = 2]\n#let k = 1\n#+end_export\n\n$k$"
+     (("$k$" "#let k = 1")))
+    ("other blocks are not preludes"
+     "#+begin_src typst\n#let k = 1\n#+end_src\n\n#+begin_export latex\n#let k = 1\n#+end_export\n\n$k$"
+     (("$k$" ""))))
+  "Org prelude cases: (NAME INPUT ((EQUATION PRELUDE) ...)).")
+
+(ert-deftest typst-overlay-test-org-prelude ()
+  "Each org equation gets the code of the Typst export blocks before it."
+  (skip-unless (treesit-language-available-p 'typst))
+  (typst-overlay-test--run-prelude-cases #'typst-overlay-test--setup-org
+                                         typst-overlay-test--org-prelude-cases))
 
 ;;; Requirements
 
