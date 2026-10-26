@@ -55,7 +55,7 @@ Equations that fail to render get a dotted red underline (face =typst-overlay-er
 <p align="center"><img src="images/errors.png" width="396" alt="An equation that fails to compile, with its error below it"></p>
 #+END_HTML
 
-=M-x typst-overlay-version= shows the version you have, from the =Version:= header of =typst-overlay.el=, which is that of the last release.
+=M-x typst-overlay-version= shows the version you have. From MELPA it is a date, the time of the commit MELPA built, as MELPA numbers its versions; from MELPA Stable or a checkout, it is the =Version:= header of =typst-overlay.el=, that of the last release.
 
 ** Definitions
 Each equation is compiled with the =#let=, =#import= and =#include= code before it, as Typst would see it, so it can use the functions and variables defined there. In Typst buffers that is the code written before the equation, in its scope. In org buffers it is the code in the Typst export blocks before it:
