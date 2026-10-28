@@ -1,0 +1,99 @@
+#+title: Architecture
+
+This document describes how typst-overlay is put together. Read it to find your way around the code before changing it. It covers what changes rarely; for the details, the docstrings in =typst-overlay.el= are the reference. Symbols are named rather than linked, so search for them.
+
+** Bird's eye view
+typst-overlay takes a buffer, finds the Typst equations in it, and covers each one with an overlay showing an SVG image of the equation, compiled by the =typst= executable.
+
+Every refresh works from scratch at the top and does as little as it can at the bottom:
+
+#+begin_example
+  buffer ──analyze──▶ analysis ──snapshot──▶ snapshot ──diff──▶ diff ──plan──▶ plan ──apply──▶ overlays
+                                                ▲                                 │
+                                         previous snapshot                  render ops
+                                                                                  ▼
+                                                      overlays ◀── finish ◀── typst (async, batched)
+#+end_example
+
+1. *Analyze*: read the whole buffer and return its math nodes (the equations) and code nodes (the =#let=, =#import= and =#include= code around them).
+2. *Snapshot*: turn each math node into an /element/: its text, its prelude (the code it sees), and a /cache key/ that hashes everything that affects its image.
+3. *Diff*: match the new snapshot against the last one by cache key. Each new element is =unchanged=, =moved= or =added=; old elements left over are deleted.
+4. *Plan*: decide, for each entry, whether an image already exists (/place/) or the equation must be compiled (/render/).
+5. *Apply*: delete, place and start renders. Renders run asynchronously; when one finishes, its result goes to wherever the equation is /by then/.
+
+The point of this shape is that typing anywhere in a large document costs one tree-sitter pass and some hashing, and compiles only the equations whose cache key is new.
+
+** Code map
+Everything lives in =typst-overlay.el=, divided by =;; heading= comments, in pipeline order. The sections below follow them.
+
+*** =;; customization=
+User options (=defcustom=) and faces. Nothing here holds state.
+
+*** =;; constants / buffer-local state=
+The buffer-local variables are all of the mode's state: =typst-overlay--snapshot= (last snapshot), =typst-overlay--registry= (what is on screen), =typst-overlay--artifact-cache= (what is on disk), the compile queue and its counters, and =typst-overlay--session=.
+
+*** =;; analyzer=
+=typst-overlay--analyzer= is the one place where buffer types differ. It returns a =typst-overlay-analysis= struct, and nothing downstream knows which mode the buffer is in.
+
+- =typst-overlay--analyze-typst= runs one tree-sitter query (=typst-overlay--query-nodes=) over the buffer and filters the captures. Math in code, or in the body of a function or loop (a /binder/), is skipped, since its variables have no value until the code runs. Code nodes record their /scope/, the =[...]= block they are in.
+- =typst-overlay--analyze-org= walks the =$= signs. For each one it asks the Typst grammar where the math ends (=typst-overlay--math-end=, which parses the text in a hidden reusable buffer), and falls back to the next unescaped =$=. Code nodes come from Typst export blocks (=typst-overlay--org-code-nodes=), parsed the same way and moved to their buffer positions.
+
+The grammar does not recover well from broken math: one bad equation can make it give up on, or swallow, the rest of the document. =typst-overlay--repair-parse= handles this by copying the buffer, blanking out the broken equations with spaces (positions are kept), and parsing again. The blanked equations are still returned, so they get compiled and underlined with their real error.
+
+*** =;; snapshot=
+=typst-overlay--make-snapshot= pairs each math node with its prelude (=typst-overlay--collect-prelude-code-nodes=: code before it, in scope) and builds a =typst-overlay-element=.
+
+The cache key (=typst-overlay--make-element=) is the element's identity. It hashes the equation text, its prelude, the contents of the files that prelude imports, =typst-overlay-extra-prelude=, the font options and =typst-overlay--render-version=. Two equations with the same key render to the same image, wherever and in whichever buffer they are.
+
+*** =;; differ=
+=typst-overlay--diff-snapshots= matches elements by cache key, with a queue per key so repeated equations (=$x$= many times) pair up in order. Position only decides =unchanged= versus =moved=.
+
+*** =;; planer=
+=typst-overlay--plan-render= turns the diff into a =typst-overlay-render-plan= of delete, place and render ops. It reads the registry and artifact cache and changes neither.
+
+- An /artifact/ is a cache key plus the path of its SVG.
+- The /registry/ maps an occurrence, its =(BEG . END)=, to a =typst-overlay-record=: the element, its overlay, its artifact, a state (=rendering=, =visible=, =stale=, =failed=) and a generation.
+
+*** =;; render=
+=typst-overlay--apply-render-plan= carries out the plan and is where Emacs overlays are made and deleted. Also here:
+
+- *Point inside an equation.* =typst-overlay--post-command-update= hides the overlay at point, so the source shows, and shows it again when point leaves. =typst-overlay--update-preview= draws the image beside, or below, the equation being edited.
+- *Edits.* An overlay's =modification-hooks= (=typst-overlay--invalidate-overlay=) delete it as soon as its text changes and mark its record =stale=. The next refresh compiles it again.
+- *Images.* =typst-overlay--read-svg= replaces the black in the SVG with =currentColor=, so equations take the color of the text and follow the theme without being compiled again. =typst-overlay--create-image= sizes them in ems, so they follow the font size. =typst-overlay--image-ascent= puts inline equations on the baseline, using a depth the compile writes into the SVG.
+
+*** =;; batch compile=
+Starting =typst= costs far more than compiling an equation, so =typst-overlay--start-renders= groups equations by cache key into jobs, and spreads the jobs evenly over at most =typst-overlay-max-active-compiles= processes. Each process compiles a single document (=typst-overlay--batch-source=), with one page per job, written to one SVG per page. Each job is its own =#[...]= block, so one equation's prelude does not leak into the next.
+
+When a batch fails, typst reports only its first error and writes no pages. =typst-overlay--finish-batch= works out from the error's line which job failed, or which prelude (failing every job that shares it), and compiles the rest again. An error it cannot trace falls back to compiling each job on its own.
+
+Results are placed by =typst-overlay--finish-job=. Each job carries markers for its equations, made when the compile started, so the result lands where the equation is now. If the equation's text changed in the meantime, the image is cached but not shown.
+
+*** =;; flymake=
+=typst-overlay-flymake= reports failed equations, read off their error overlays. Compiles finish after Flymake has asked, so =typst-overlay--flymake-report= reports again each time a batch finishes.
+
+*** Cache (=typst-overlay--cache-dir= and around)
+SVGs are stored as =<cache-key>.svg= in a folder per source folder under =typst-overlay-cache-directory=. The artifact cache is filled from that folder when the mode starts. Images shown are touched once per session (=typst-overlay--mark-used=), and =typst-overlay--prune-cache= deletes the ones that haven't been shown for a while.
+
+*** =;; loop= and =;; mode=
+=typst-overlay-refresh= runs the pipeline above. It is called when the mode starts, by an idle timer after edits (=typst-overlay--schedule-refresh=), or by hand. =typst-overlay--enable= and =typst-overlay--disable= set up and remove the hooks.
+
+*** =test/typst-overlay-test.el=
+The tests are table-driven. Detection tables pair an input with the equations that should be found in it. The /Edits/ tables apply steps (insert, refresh, run compiles, compile out of order, delete the cache, reopen) and check what was compiled and what each equation shows. Most behavior changes should come with a row in one of these tables.
+
+** Invariants
+- *The analyzer is the only mode-specific code.* Org and Typst buffers differ only in how math and code nodes are found. If you find yourself checking the major mode further down, the difference belongs in the analysis instead.
+- *The cache key decides everything.* If something changes an equation's image, it must be in the cache key; if not, cached images go stale silently. Changes to how equations are compiled bump =typst-overlay--render-version=.
+- *Diff and plan do not touch the buffer or the disk*, apart from checking that an SVG still exists. Only apply and the compile callbacks create equation overlays.
+- *Async results never trust positions.* A result is checked against its record's generation (a later refresh supersedes it), against =typst-overlay--session= (the mode was turned off in the meantime), and against its markers and text (the equation moved or changed).
+- *Never write next to the user's files.* All output goes under =typst-overlay-cache-directory=, and compiles run in a temporary folder there. Pruning only touches files and folders named the way the cache names them.
+- *Every refresh reads the whole buffer.* It widens first, since otherwise equations outside the narrowing would lose their overlays. There is no incremental analysis; the tree-sitter pass is cheap, and the diff is what keeps refreshes small.
+- *No code from the buffer runs in Emacs.* The only code that runs is Typst, in the =typst= process. That is why the Flymake backend is marked =flymake-always-safe=.
+
+** Cross-cutting concerns
+*Performance.* The hot path is a refresh after one keystroke in a large document: every equation after the edit has moved. The code avoids work per equation there. It compares an overlay's position before checking the disk (=typst-overlay--artifact-reusable-p=), keeps an overlay that already shows the right image where the equation now is (=typst-overlay--overlay-shows-p=), hashes each shared prelude once (=typst-overlay--prelude-table=), and reuses hidden parse buffers instead of =treesit-parse-string=. Comments mark these spots; keep them in mind when touching that code.
+
+*Imports.* typst reads the batch from stdin, with the project root as its root, so relative =#import= paths are rewritten from the buffer's folder to the root (=typst-overlay--root-paths=). Imported files are hashed into the cache key, so editing one renders its users again. Cache folders are per source folder because the same relative import can name different files in different folders.
+
+*Errors.* A failed equation keeps its source visible with an error overlay (face =typst-overlay-error=). The message is shown through ElDoc, =help-echo= and Flymake, all of them read from that overlay.
+
+*Compatibility.* Emacs 29.1 is the minimum (=Package-Requires=), and CI runs the tests on 29.1, 30 and 31, and byte-compiles with warnings as errors. It also runs package-lint, checkdoc and melpazoid. Newer features are guarded, as with the Flymake origin and the dotted underline.
