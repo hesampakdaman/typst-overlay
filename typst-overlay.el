@@ -1804,7 +1804,6 @@ whose SESSION is outdated, are ignored."
                  for page from 1
                  do (rename-file (alist-get page pages)
                                  (typst-overlay-job-svg-path job) t)
-                    (typst-overlay--write-deps (typst-overlay-job-svg-path job) deps)
                     (typst-overlay--finish-job job artifact-cache deps nil)))
        ;; A traceable error: fail those jobs, compile the rest again.
        ((and location
@@ -1862,7 +1861,12 @@ is warned about once."
   "Show the result of JOB for each of its equations: its SVG, or ERROR.
 ERROR is nil for a successful result, which ARTIFACT-CACHE receives.
 DEPS are the files its batch read, as `typst-overlay--batch-deps'
-returns them, kept so it is compiled again when one changes."
+returns them, kept so it is compiled again when one changes.  A job
+that cannot read files keeps none; see `typst-overlay--reads-files-p'."
+  (setq deps (and (typst-overlay--reads-files-p (typst-overlay-job-element job))
+                  deps))
+  (unless error
+    (typst-overlay--write-deps (typst-overlay-job-svg-path job) deps))
   (pcase-dolist (`(,element . ,markers) (typst-overlay-job-occurrences job))
     (let ((current (typst-overlay--relocate-element element markers)))
       (if error
@@ -2066,8 +2070,8 @@ within the length Windows allows."
 ;; which with --deps, so each image keeps them, with a hash of each, in
 ;; a .deps file next to its SVG.  An image whose files changed is no
 ;; longer shown, and its equation is compiled again.  Which job read
-;; which file is not known, so every job of a batch keeps all of the
-;; files the batch read.
+;; which file is not known, so every job of a batch that may read files
+;; keeps all of the files the batch read.
 
 (defvar typst-overlay--deps-supported 'unknown
   "Whether the typst on PATH can write the files it read, or `unknown'.")
@@ -2103,6 +2107,25 @@ stdin is left out.  Return nil if there is no deps.json."
                     (let ((path (expand-file-name input root)))
                       (list (cons path (typst-overlay--current-hash path))))))
                 (alist-get 'inputs (json-read-file file)))))))
+
+(defconst typst-overlay--reads-files-regexp
+  (concat "#\\(?:import\\|include\\)\\b"
+          "\\|\\(?:\\`\\|[^[:alnum:]_.-]\\)"
+          (regexp-opt '("read" "json" "yaml" "toml" "csv" "xml" "cbor"
+                        "image" "plugin" "bibliography"))
+          "(")
+  "Regexp matching Typst code that may read a file.")
+
+(defun typst-overlay--reads-files-p (element)
+  "Return non-nil if compiling ELEMENT may read a file.
+That is if its block imports or includes a file, or calls a function
+that reads one, such as `json'.  Its batch may have read files for
+other equations, which it then does not depend on.  A way to read a
+file this misses leaves it as before files were tracked."
+  (string-match-p typst-overlay--reads-files-regexp
+                  (concat typst-overlay-extra-prelude "\n"
+                          (typst-overlay-element-prelude-text element) "\n"
+                          (typst-overlay-element-text element))))
 
 (defun typst-overlay--deps-path (svg-path)
   "Return where the files the image SVG-PATH was compiled from are kept."

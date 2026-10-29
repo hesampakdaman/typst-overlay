@@ -1329,7 +1329,10 @@ This holds whether Eglot starts before or after the mode."
 ;; before it is rendered.  STEPS are as in the edit cases, and may also
 ;; be (write FILE TEXT), (delete FILE), `mode-off' or `mode-on'.
 ;; COMPILED and SHOWN are as in the edit cases.  $z$ comes before the
-;; export block, so it reads no file and is never compiled again.
+;; export block, so it reads no file and is never compiled again, even
+;; when it was compiled in the same batch as $f$.  So every case is
+;; checked with each equation in a batch of its own, and with both in
+;; one.
 
 (defconst typst-overlay-test--deps-text
   "$z$\n\n#+begin_export typst\n#import \"outer.typ\": *\n#+end_export\n\n$f$\n"
@@ -1374,16 +1377,19 @@ This holds whether Eglot starts before or after the mode."
 (ert-deftest typst-overlay-test-dependencies ()
   "Equations are compiled again when a file they read changes."
   (skip-unless (treesit-language-available-p 'typst))
-  (dolist (case typst-overlay-test--deps-cases)
-    (pcase-let ((`(,name ,files ,steps ,expected-compiled ,expected-shown) case))
-      (let ((typst-overlay-test--files files))
-        (typst-overlay-test--with-batches typst-overlay-test--deps-text #'ignore
-          (run-compiles)
-          (setq compiled nil)
-          (dolist (step (append steps '(refresh run)))
-            (typst-overlay-test--step step dir #'run-compiles))
-          (should (equal (list name expected-compiled expected-shown)
-                         (list name compiled (typst-overlay-test--shown)))))))))
+  (dolist (max-compiles '(8 1))
+    (dolist (case typst-overlay-test--deps-cases)
+      (pcase-let ((`(,name ,files ,steps ,expected-compiled ,expected-shown) case))
+        (let ((typst-overlay-test--files files)
+              (typst-overlay-max-active-compiles max-compiles))
+          (typst-overlay-test--with-batches typst-overlay-test--deps-text #'ignore
+            (run-compiles)
+            (setq compiled nil)
+            (dolist (step (append steps '(refresh run)))
+              (typst-overlay-test--step step dir #'run-compiles))
+            (should (equal (list name max-compiles expected-compiled expected-shown)
+                           (list name max-compiles compiled
+                                 (typst-overlay-test--shown))))))))))
 
 (ert-deftest typst-overlay-test-deps-supported ()
   "Dependencies are tracked with typst 0.14 or later, which has --deps."
