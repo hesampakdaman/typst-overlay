@@ -704,10 +704,25 @@ Preludes come from Typst export blocks, see
 Changing it renders cached equations again, for changes that make
 their images differ, such as writing their depth to the SVG.")
 
+(defvar typst-overlay--typst-version-line nil
+  "What `typst --version' printed, or nil if not asked yet.")
+
+(defun typst-overlay--typst-version ()
+  "Return what `typst --version' prints, asking once a session.
+Part of every cache key, so equations are compiled again after typst
+is upgraded, whose images may differ.  It includes the commit, which
+changes with every build of typst from source."
+  (or typst-overlay--typst-version-line
+      (setq typst-overlay--typst-version-line
+            (or (and (executable-find "typst")
+                     (car (process-lines-ignore-status "typst" "--version")))
+                ""))))
+
 (defun typst-overlay--make-element (math-node prelude-code-nodes &optional preludes)
   "Build an element from MATH-NODE and PRELUDE-CODE-NODES.
 The cache key also covers `typst-overlay-extra-prelude' and the files
-it imports, the fonts typst may use and `typst-overlay--render-version'.
+it imports, the fonts typst may use, the version of typst and
+`typst-overlay--render-version'.
 
 PRELUDES, if non-nil, is a hash table from `typst-overlay--prelude-table'
 that keeps each prelude's text and hash, so a prelude shared by many
@@ -722,6 +737,7 @@ math nodes is built and hashed once."
                                                      typst-overlay-extra-prelude
                                                      preludes)))
                                        typst-overlay--render-version
+                                       (typst-overlay--typst-version)
                                        ;; Only when changed, so images cached
                                        ;; before these options stay valid.
                                        (and (or typst-overlay-system-fonts

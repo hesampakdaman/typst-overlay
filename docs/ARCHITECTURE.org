@@ -43,7 +43,7 @@ The grammar does not recover well from broken math: one bad equation can make it
 *** =;; snapshot=
 =typst-overlay--make-snapshot= pairs each math node with its prelude (=typst-overlay--collect-prelude-code-nodes=: code before it, in scope) and builds a =typst-overlay-element=.
 
-The cache key (=typst-overlay--make-element=) is the element's identity. It hashes the equation text, its prelude, the contents of the files that prelude imports, =typst-overlay-extra-prelude=, the font options and =typst-overlay--render-version=. Two equations with the same key render to the same image, wherever and in whichever buffer they are.
+The cache key (=typst-overlay--make-element=) is the element's identity. It hashes the equation text, its prelude, the contents of the files that prelude imports, =typst-overlay-extra-prelude=, the font options, the version of typst (=typst-overlay--typst-version=) and =typst-overlay--render-version=, which stands for typst-overlay's own way of compiling. Two equations with the same key render to the same image, wherever and in whichever buffer they are.
 
 *** =;; differ=
 =typst-overlay--diff-snapshots= matches elements by cache key, with a queue per key so repeated equations (=$x$= many times) pair up in order. Position only decides =unchanged= versus =moved=.

@@ -541,6 +541,9 @@ MESSAGE is the error it reports there."
   "Return how many pages batch SOURCE produces, one per equation."
   (length (typst-overlay-test--source-equations source)))
 
+(defvar typst-overlay-test--typst-version "typst 0.15.1 (test)"
+  "What the fake typst of `typst-overlay-test--with-batches' says it is.")
+
 (defmacro typst-overlay-test--with-batches (text behavior &rest body)
   "Enable the mode on an org file with TEXT, compiling with a fake typst.
 BEHAVIOR is called with each batch source and returns nil to succeed
@@ -560,6 +563,8 @@ and `compiled' the equations compiled, in order."
                     (expand-file-name "cache/" dir))
                    ((symbol-function 'executable-find)
                     (lambda (&rest _) "/usr/bin/typst"))
+                   ((symbol-function 'typst-overlay--typst-version)
+                    (lambda () typst-overlay-test--typst-version))
                    ;; CI's Emacs may lack SVG support; no real image is needed.
                    ((symbol-function 'image-type-available-p)
                     (lambda (&rest _) t))
@@ -753,8 +758,9 @@ and `compiled' the equations compiled, in order."
 ;; then STEPS are applied, followed by a refresh and running every
 ;; compile.  A step is (insert POS STRING), (replace FROM TO) for the
 ;; first FROM, `refresh', `run', `run-newest-first' (compiles finish
-;; out of order), `delete-images' (the cache folder's SVGs are deleted)
-;; or `reopen' (the mode is turned off and on).  COMPILED is the
+;; out of order), `delete-images' (the cache folder's SVGs are deleted),
+;; `reopen' (the mode is turned off and on) or (typst-version VERSION)
+;; (typst says it is VERSION from now on).  COMPILED is the
 ;; equations compiled during STEPS, in order.  SHOWN describes each
 ;; equation's overlay in buffer order: its text when it shows its own
 ;; image, "TEXT showing OTHER" for another equation's image, and
@@ -803,7 +809,12 @@ and `compiled' the equations compiled, in order."
     ("edited while failing, results out of order: outdated failure dropped"
      "$a$ and $b$" ((replace "$b$" "$BAD$") refresh (replace "$BAD$" "$BAE$") refresh
                     run-newest-first)
-     ("$BAD$" "$BAE$") ("$a$" "$BAE$")))
+     ("$BAD$" "$BAE$") ("$a$" "$BAE$"))
+    ("typst upgraded: everything compiled again"
+     "$a$ and $b$" ((typst-version "typst 0.16.0 (test)")) ("$a$" "$b$") ("$a$" "$b$"))
+    ("typst upgraded, then reopened: everything compiled again"
+     "$a$ and $b$" ((typst-version "typst 0.16.0 (test)") reopen)
+     ("$a$" "$b$") ("$a$" "$b$")))
   "Edit cases: (NAME TEXT STEPS COMPILED SHOWN).")
 
 (defun typst-overlay-test--shown ()
@@ -830,7 +841,8 @@ See `typst-overlay-test--edit-cases'."
   "After edits, only what changed is compiled and each equation shows its image."
   (skip-unless (treesit-language-available-p 'typst))
   (dolist (case typst-overlay-test--edit-cases)
-    (pcase-let ((`(,name ,text ,steps ,expected-compiled ,expected-shown) case))
+    (pcase-let ((`(,name ,text ,steps ,expected-compiled ,expected-shown) case)
+                (typst-overlay-test--typst-version typst-overlay-test--typst-version))
       (typst-overlay-test--with-batches text
           (typst-overlay-test--error-at "BAD" "unknown variable: BAD")
         (run-compiles)
@@ -848,7 +860,8 @@ See `typst-overlay-test--edit-cases'."
             ('delete-images
              (dolist (file (directory-files-recursively dir "\\.svg\\'"))
                (delete-file file)))
-            ('reopen (typst-overlay-mode -1) (typst-overlay-mode 1))))
+            ('reopen (typst-overlay-mode -1) (typst-overlay-mode 1))
+            (`(typst-version ,version) (setq typst-overlay-test--typst-version version))))
         (should (equal (list name expected-compiled expected-shown)
                        (list name compiled (typst-overlay-test--shown))))))))
 
@@ -1270,13 +1283,16 @@ This holds whether Eglot starts before or after the mode."
                        (list name (typst-overlay--font-args))))))))
 
 (ert-deftest typst-overlay-test-font-cache-key ()
-  "Font options change the cache key, but the defaults keep earlier keys."
-  (let* ((typst-overlay-extra-prelude "")
-         (key (lambda () (typst-overlay-element-cache-key
-                          (typst-overlay-test--element 1 "$x$"))))
-         (default (funcall key)))
+  "Font options change the cache key, but the defaults add nothing to it."
+  (cl-letf* (((symbol-function 'typst-overlay--typst-version)
+              (lambda () "typst 0.15.1 (test)"))
+             (typst-overlay-extra-prelude "")
+             (key (lambda () (typst-overlay-element-cache-key
+                              (typst-overlay-test--element 1 "$x$"))))
+             (default (funcall key)))
     (should (equal default (md5 (concat (md5 "$x$") (md5 "") (md5 "")
-                                        typst-overlay--render-version))))
+                                        typst-overlay--render-version
+                                        "typst 0.15.1 (test)"))))
     (let ((typst-overlay-system-fonts t))
       (should-not (equal (funcall key) default)))
     (let ((typst-overlay-font-paths '("/fonts")))
