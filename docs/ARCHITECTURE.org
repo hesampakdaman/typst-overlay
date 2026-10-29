@@ -43,7 +43,7 @@ The grammar does not recover well from broken math: one bad equation can make it
 *** =;; snapshot=
 =typst-overlay--make-snapshot= pairs each math node with its prelude (=typst-overlay--collect-prelude-code-nodes=: code before it, in scope) and builds a =typst-overlay-element=.
 
-The cache key (=typst-overlay--make-element=) is the element's identity. It hashes the equation text, its prelude, the contents of the files that prelude imports, =typst-overlay-extra-prelude=, the font options and =typst-overlay--render-version=. Two equations with the same key render to the same image, wherever and in whichever buffer they are.
+The cache key (=typst-overlay--make-element=) is the element's identity. It hashes the equation text, its prelude, the contents of the files that prelude imports, =typst-overlay-extra-prelude=, the font options and =typst-overlay--render-version=. Two equations with the same key render to the same image, wherever and in whichever buffer they are, as long as the files they read have not changed since; see /Dependencies/ below.
 
 *** =;; differ=
 =typst-overlay--diff-snapshots= matches elements by cache key, with a queue per key so repeated equations (=$x$= many times) pair up in order. Position only decides =unchanged= versus =moved=.
@@ -51,7 +51,7 @@ The cache key (=typst-overlay--make-element=) is the element's identity. It hash
 *** =;; planer=
 =typst-overlay--plan-render= turns the diff into a =typst-overlay-render-plan= of delete, place and render ops. It reads the registry and artifact cache and changes neither.
 
-- An /artifact/ is a cache key plus the path of its SVG.
+- An /artifact/ is a cache key plus the path of its SVG and the files it was compiled from.
 - The /registry/ maps an occurrence, its =(BEG . END)=, to a =typst-overlay-record=: the element, its overlay, its artifact, a state (=rendering=, =visible=, =stale=, =failed=) and a generation.
 
 *** =;; render=
@@ -72,7 +72,7 @@ Results are placed by =typst-overlay--finish-job=. Each job carries markers for 
 =typst-overlay-flymake= reports failed equations, read off their error overlays. Compiles finish after Flymake has asked, so =typst-overlay--flymake-report= reports again each time a batch finishes.
 
 *** Cache (=typst-overlay--cache-dir= and around)
-SVGs are stored as =<cache-key>.svg= in a folder per source folder under =typst-overlay-cache-directory=. The artifact cache is filled from that folder when the mode starts. Images shown are touched once per session (=typst-overlay--mark-used=), and =typst-overlay--prune-cache= deletes the ones that haven't been shown for a while.
+SVGs are stored as =<cache-key>.svg= in a folder per source folder under =typst-overlay-cache-directory=, each with a =<cache-key>.deps= listing the files it was compiled from, if it read any. The artifact cache is filled from that folder when the mode starts. Images shown are touched once per session (=typst-overlay--mark-used=), and =typst-overlay--prune-cache= deletes the ones that haven't been shown for a while.
 
 *** =;; loop= and =;; mode=
 =typst-overlay-refresh= runs the pipeline above. It is called when the mode starts, by an idle timer after edits (=typst-overlay--schedule-refresh=), or by hand. =typst-overlay--enable= and =typst-overlay--disable= set up and remove the hooks.
@@ -82,7 +82,7 @@ The tests are table-driven. Detection tables pair an input with the equations th
 
 ** Invariants
 - *The analyzer is the only mode-specific code.* Org and Typst buffers differ only in how math and code nodes are found. If you find yourself checking the major mode further down, the difference belongs in the analysis instead.
-- *The cache key decides everything.* If something changes an equation's image, it must be in the cache key; if not, cached images go stale silently. Changes to how equations are compiled bump =typst-overlay--render-version=.
+- *The cache key and the files read decide everything.* If something changes an equation's image, it must be in the cache key, or be a file its compile read; if not, cached images go stale silently. Changes to how equations are compiled bump =typst-overlay--render-version=.
 - *Diff and plan do not touch the buffer or the disk*, apart from checking that an SVG still exists. Only apply and the compile callbacks create equation overlays.
 - *Async results never trust positions.* A result is checked against its record's generation (a later refresh supersedes it), against =typst-overlay--session= (the mode was turned off in the meantime), and against its markers and text (the equation moved or changed).
 - *Never write next to the user's files.* All output goes under =typst-overlay-cache-directory=, and compiles run in a temporary folder there. Pruning only touches files and folders named the way the cache names them.
@@ -92,7 +92,9 @@ The tests are table-driven. Detection tables pair an input with the equations th
 ** Cross-cutting concerns
 *Performance.* The hot path is a refresh after one keystroke in a large document: every equation after the edit has moved. The code avoids work per equation there. It compares an overlay's position before checking the disk (=typst-overlay--artifact-reusable-p=), keeps an overlay that already shows the right image where the equation now is (=typst-overlay--overlay-shows-p=), hashes each shared prelude once (=typst-overlay--prelude-table=), and reuses hidden parse buffers instead of =treesit-parse-string=. Comments mark these spots; keep them in mind when touching that code.
 
-*Imports.* typst reads the batch from stdin, with the project root as its root, so relative =#import= paths are rewritten from the buffer's folder to the root (=typst-overlay--root-paths=). Imported files are hashed into the cache key, so editing one renders its users again. Cache folders are per source folder because the same relative import can name different files in different folders.
+*Imports.* typst reads the batch from stdin, with the project root as its root, so relative =#import= paths are rewritten from the buffer's folder to the root (=typst-overlay--root-paths=). Files the prelude names are hashed into the cache key, so editing one renders its users again. Cache folders are per source folder because the same relative import can name different files in different folders.
+
+*Dependencies.* A file can also be read without the prelude naming it: imported by an imported file, or read with =json(...)=. With typst 0.14 or later, which has =--deps=, each batch writes the files it read, and every image of the batch keeps them with their hashes (=typst-overlay--batch-deps=), as do failed equations. Which job read which file is not known, so a change renders the whole batch again, not only the equations that read the file. Each refresh first drops the overlays whose files changed (=typst-overlay--invalidate-changed-deps=), and a file is only hashed again when its modification time or size changes (=typst-overlay--current-hash=). Since the cache key does not cover these files, an image compiled after a change replaces the one from before it.
 
 *Errors.* A failed equation keeps its source visible with an error overlay (face =typst-overlay-error=). The message is shown through ElDoc, =help-echo= and Flymake, all of them read from that overlay.
 

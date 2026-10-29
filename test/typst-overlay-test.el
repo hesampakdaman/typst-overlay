@@ -18,6 +18,7 @@
 
 (require 'ert)
 (require 'flymake)
+(require 'json)
 (require 'image)  ; before `create-image' is stubbed, so loading it later cannot undo that
 (require 'org)
 (require 'typst-overlay)
@@ -541,6 +542,41 @@ MESSAGE is the error it reports there."
   "Return how many pages batch SOURCE produces, one per equation."
   (length (typst-overlay-test--source-equations source)))
 
+(defvar typst-overlay-test--files nil
+  "Files for `typst-overlay-test--with-batches' to write: (FILE TEXT) each.")
+
+(defconst typst-overlay-test--read-regexp
+  "\\(?:#import\\|#include\\|json(\\|read(\\)[ \t]*\"\\([^\"@][^\"]*\\)\""
+  "Regexp matching a file read in Typst source, for the fake typst.
+Its first group is the path, as written.")
+
+(defun typst-overlay-test--deps (source root)
+  "Return the files the fake typst reads for SOURCE, relative to ROOT.
+Those are the files SOURCE imports, includes or reads with `json' or
+`read', and those they do in turn, in the order found.  Paths written
+from the root start with /, others are from the file they are in."
+  (let (deps)
+    (cl-labels ((walk (text dir)
+                  (let ((start 0))
+                    (while (string-match typst-overlay-test--read-regexp text start)
+                      (setq start (match-end 0))
+                      (let* ((written (match-string 1 text))
+                             (file (file-relative-name
+                                    (if (string-prefix-p "/" written)
+                                        (expand-file-name (substring written 1) root)
+                                      (expand-file-name written dir))
+                                    root)))
+                        (unless (member file deps)
+                          (push file deps)
+                          (let ((path (expand-file-name file root)))
+                            (when (file-regular-p path)
+                              (walk (with-temp-buffer
+                                      (insert-file-contents path)
+                                      (buffer-string))
+                                    (file-name-directory path))))))))))
+      (walk source root))
+    (nreverse deps)))
+
 (defmacro typst-overlay-test--with-batches (text behavior &rest body)
   "Enable the mode on an org file with TEXT, compiling with a fake typst.
 BEHAVIOR is called with each batch source and returns nil to succeed
@@ -548,7 +584,12 @@ or typst's error output to fail.  Each SVG written names the equation
 it was rendered from.  Within BODY, `run-compiles' runs pending
 compiles until none are left, the newest first if given a non-nil
 argument.  `batches' lists the page counts of every compile started,
-and `compiled' the equations compiled, in order."
+and `compiled' the equations compiled, in order.
+
+The files in `typst-overlay-test--files' are written next to the org
+file first.  Like typst, the fake one writes the files a batch read to
+deps.json in its folder, as found by `typst-overlay-test--deps', and
+fails if one of them is missing."
   (declare (indent 2))
   `(let ((dir (make-temp-file "typst-overlay-test-" t))
          (pending nil)
@@ -565,6 +606,8 @@ and `compiled' the equations compiled, in order."
                     (lambda (&rest _) t))
                    ((symbol-function 'create-image)
                     (lambda (data &rest _) (list 'image :type 'svg :data data)))
+                   ((symbol-function 'typst-overlay--deps-supported-p)
+                    (lambda () t))
                    ((symbol-function 'typst-overlay--compile-async)
                     (lambda (source out callback)
                       (setq batches (append batches
@@ -574,17 +617,32 @@ and `compiled' the equations compiled, in order."
                                              (typst-overlay-test--source-equations
                                               source)))
                       (setq pending (append pending
-                                            (list (list source out callback)))))))
+                                            (list (list source out callback
+                                                        default-directory)))))))
            (with-temp-buffer
              (setq buffer-file-name (expand-file-name "test.org" dir))
+             (pcase-dolist (`(,file ,contents) typst-overlay-test--files)
+               (write-region contents nil (expand-file-name file dir)))
              (insert ,text)
              (org-mode)
              (cl-flet ((run-compiles (&optional newest-first)
                          (when newest-first
                            (setq pending (reverse pending)))
                          (while pending
-                           (pcase-let* ((`(,source ,out ,callback) (pop pending))
-                                        (output (funcall behavior source)))
+                           (pcase-let* ((`(,source ,out ,callback ,root) (pop pending))
+                                        (deps (typst-overlay-test--deps source root))
+                                        (missing (seq-find
+                                                  (lambda (file)
+                                                    (not (file-exists-p
+                                                          (expand-file-name file root))))
+                                                  deps))
+                                        (output (or (funcall behavior source)
+                                                    (and missing
+                                                         (format "%s:1:1: error: file not found\n"
+                                                                 missing)))))
+                             (with-temp-file (expand-file-name "deps.json" out)
+                               (insert (json-encode
+                                        `((inputs . ,(vconcat (cons "<stdin>" deps)))))))
                              (unless output
                                (seq-do-indexed
                                 (lambda (equation i)
@@ -826,6 +884,29 @@ See `typst-overlay-test--edit-cases'."
                             (overlays-in (point-min) (point-max)))
                 (lambda (a b) (< (overlay-start a) (overlay-start b))))))
 
+(defun typst-overlay-test--step (step dir run-compiles)
+  "Apply STEP of an edit or dependency case to the current buffer.
+DIR is the folder of the buffer's file, and RUN-COMPILES the
+`run-compiles' of `typst-overlay-test--with-batches'.  See
+`typst-overlay-test--edit-cases' and `typst-overlay-test--deps-cases'."
+  (pcase step
+    (`(insert ,pos ,string) (goto-char pos) (insert string))
+    (`(replace ,from ,to)
+     (goto-char (point-min))
+     (search-forward from)
+     (replace-match to t t))
+    (`(write ,file ,text) (write-region text nil (expand-file-name file dir)))
+    (`(delete ,file) (delete-file (expand-file-name file dir)))
+    ('refresh (typst-overlay-refresh))
+    ('run (funcall run-compiles))
+    ('run-newest-first (funcall run-compiles t))
+    ('delete-images
+     (dolist (file (directory-files-recursively dir "\\.svg\\'"))
+       (delete-file file)))
+    ('reopen (typst-overlay-mode -1) (typst-overlay-mode 1))
+    ('mode-off (typst-overlay-mode -1))
+    ('mode-on (typst-overlay-mode 1))))
+
 (ert-deftest typst-overlay-test-edits ()
   "After edits, only what changed is compiled and each equation shows its image."
   (skip-unless (treesit-language-available-p 'typst))
@@ -836,19 +917,7 @@ See `typst-overlay-test--edit-cases'."
         (run-compiles)
         (setq compiled nil)
         (dolist (step (append steps '(refresh run)))
-          (pcase step
-            (`(insert ,pos ,string) (goto-char pos) (insert string))
-            (`(replace ,from ,to)
-             (goto-char (point-min))
-             (search-forward from)
-             (replace-match to t t))
-            ('refresh (typst-overlay-refresh))
-            ('run (run-compiles))
-            ('run-newest-first (run-compiles t))
-            ('delete-images
-             (dolist (file (directory-files-recursively dir "\\.svg\\'"))
-               (delete-file file)))
-            ('reopen (typst-overlay-mode -1) (typst-overlay-mode 1))))
+          (typst-overlay-test--step step dir #'run-compiles))
         (should (equal (list name expected-compiled expected-shown)
                        (list name compiled (typst-overlay-test--shown))))))))
 
@@ -1250,6 +1319,81 @@ This holds whether Eglot starts before or after the mode."
         (should (equal (typst-overlay--read-svg file)
                        "<path fill=\"currentColor\" stroke=\"currentColor\"/><path fill=\"#ff0000\"/>"))
       (delete-file file))))
+
+;;; Dependencies
+
+;; An equation is compiled again when a file it read changes, even one
+;; its prelude does not name, such as a file imported by an imported
+;; file.  Each case is (NAME FILES STEPS COMPILED SHOWN).  FILES are
+;; written next to `typst-overlay-test--deps-text', (FILE TEXT) each,
+;; before it is rendered.  STEPS are as in the edit cases, and may also
+;; be (write FILE TEXT), (delete FILE), `mode-off' or `mode-on'.
+;; COMPILED and SHOWN are as in the edit cases.  $z$ comes before the
+;; export block, so it reads no file and is never compiled again.
+
+(defconst typst-overlay-test--deps-text
+  "$z$\n\n#+begin_export typst\n#import \"outer.typ\": *\n#+end_export\n\n$f$\n"
+  "Org text for the dependency cases.")
+
+(defconst typst-overlay-test--deps-cases
+  '(("nested import changed: compiled again"
+     (("outer.typ" "#import \"inner.typ\": *") ("inner.typ" "#let f = 1"))
+     ((write "inner.typ" "#let f = 2"))
+     ("$f$") ("$z$" "$f$"))
+    ("data file changed: compiled again"
+     (("outer.typ" "#import \"inner.typ\": *")
+      ("inner.typ" "#let f = json(\"d.json\")") ("d.json" "1"))
+     ((write "d.json" "2"))
+     ("$f$") ("$z$" "$f$"))
+    ("nothing changed: nothing compiled"
+     (("outer.typ" "#import \"inner.typ\": *") ("inner.typ" "#let f = 1"))
+     ()
+     () ("$z$" "$f$"))
+    ("unrelated file changed: nothing compiled"
+     (("outer.typ" "#import \"inner.typ\": *") ("inner.typ" "#let f = 1"))
+     ((write "other.typ" "#let g = 1"))
+     () ("$z$" "$f$"))
+    ("changed back: compiled again, as its image was replaced"
+     (("outer.typ" "#import \"inner.typ\": *") ("inner.typ" "#let f = 1"))
+     ((write "inner.typ" "#let f = 2") refresh run (write "inner.typ" "#let f = 1"))
+     ("$f$" "$f$") ("$z$" "$f$"))
+    ("dependency deleted: compiled again and failed"
+     (("outer.typ" "#import \"inner.typ\": *") ("inner.typ" "#let f = 1"))
+     ((delete "inner.typ"))
+     ("$f$") ("$z$" "$f$ failed"))
+    ("missing dependency created: compiled again"
+     (("outer.typ" "#import \"inner.typ\": *"))
+     ((write "inner.typ" "#let f = 1"))
+     ("$f$") ("$z$" "$f$"))
+    ("changed while the mode was off: compiled again"
+     (("outer.typ" "#import \"inner.typ\": *") ("inner.typ" "#let f = 1"))
+     (mode-off (write "inner.typ" "#let f = 2") mode-on)
+     ("$f$") ("$z$" "$f$")))
+  "Dependency cases: (NAME FILES STEPS COMPILED SHOWN).")
+
+(ert-deftest typst-overlay-test-dependencies ()
+  "Equations are compiled again when a file they read changes."
+  (skip-unless (treesit-language-available-p 'typst))
+  (dolist (case typst-overlay-test--deps-cases)
+    (pcase-let ((`(,name ,files ,steps ,expected-compiled ,expected-shown) case))
+      (let ((typst-overlay-test--files files))
+        (typst-overlay-test--with-batches typst-overlay-test--deps-text #'ignore
+          (run-compiles)
+          (setq compiled nil)
+          (dolist (step (append steps '(refresh run)))
+            (typst-overlay-test--step step dir #'run-compiles))
+          (should (equal (list name expected-compiled expected-shown)
+                         (list name compiled (typst-overlay-test--shown)))))))))
+
+(ert-deftest typst-overlay-test-deps-supported ()
+  "Dependencies are tracked with typst 0.14 or later, which has --deps."
+  (dolist (case '(("typst 0.14.0 (b6e2bf6e)" t)
+                  ("typst 0.15.1 (9dfd3a08)" t)
+                  ("typst 1.0.0" t)
+                  ("typst 0.13.1 (8ace67d9)" nil)
+                  ("something else" nil)))
+    (should (equal case (list (car case)
+                              (typst-overlay--deps-version-p (car case)))))))
 
 ;;; Fonts
 

@@ -74,6 +74,8 @@ Other blocks, such as =#+begin_src typst=, are left out, and so is other code in
 
 Code for every buffer, such as =#set= and =#show= rules, goes in =typst-overlay-extra-prelude=, which can also be set per project in =.dir-locals.el=.
 
+When a file an equation reads changes, the equation is rendered again on the next refresh. That is a file its code imports or includes, and with typst 0.14 or later, also the files that one imports or reads in turn, such as with =json(...)=. A file that is missing is noticed when it is created, so an equation that failed because of it renders.
+
 ** Cache
 Rendered equations are saved as SVG files in =typst-overlay-cache-directory=, by default =~/.cache/typst-overlay/= (=~/Library/Caches/typst-overlay/= on macOS, =%LOCALAPPDATA%\typst-overlay\= on Windows), so reopening a file shows them without compiling again. Nothing is written next to your files. Each folder of files gets its own folder there, named after its path as for backup files: =/home/me/notes/= becomes =!home!me!notes!=. Buffers without a file, such as those of =org-capture=, use their own folder's. Images not shown for =typst-overlay-cache-max-age= days, 30 by default, are deleted, checked at most once a day while Emacs is idle; set it to =nil= to keep them. The directory, or a folder in it, is also safe to delete at any time, and equations are compiled again as needed.
 

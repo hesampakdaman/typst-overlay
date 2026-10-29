@@ -39,6 +39,7 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'json)
 (require 'seq)
 (require 'project)
 (require 'subr-x)
@@ -699,10 +700,11 @@ Preludes come from Typst export blocks, see
   prelude-hash
   cache-key)
 
-(defconst typst-overlay--render-version "2"
+(defconst typst-overlay--render-version "3"
   "Version of how equations are compiled, part of every cache key.
 Changing it renders cached equations again, for changes that make
-their images differ, such as writing their depth to the SVG.")
+their images differ, such as writing their depth to the SVG, or what
+is kept with them, such as the files they read.")
 
 (defun typst-overlay--make-element (math-node prelude-code-nodes &optional preludes)
   "Build an element from MATH-NODE and PRELUDE-CODE-NODES.
@@ -967,14 +969,17 @@ The resulting diff contains:
 
 ;; planer
 (cl-defstruct typst-overlay-artifact
-  cache-key    ;; string: render identity
-  svg-path)    ;; string: path to rendered svg
+  cache-key       ;; string: render identity
+  svg-path        ;; string: path to rendered svg
+  (deps 'unread)) ;; ((FILE . HASH) ...) it was compiled from, or `unread'
 
 (defun typst-overlay--artifact-live-p (artifact)
-  "Return non-nil if ARTIFACT's SVG is still on disk.
-The cache folder may be deleted while overlays are shown."
+  "Return non-nil if ARTIFACT's SVG is still on disk and up to date.
+The cache folder may be deleted while overlays are shown, and the
+files it was compiled from may change; see `typst-overlay--deps-fresh-p'."
   (and artifact
-       (file-exists-p (typst-overlay-artifact-svg-path artifact))))
+       (file-exists-p (typst-overlay-artifact-svg-path artifact))
+       (typst-overlay--deps-fresh-p (typst-overlay--artifact-deps artifact))))
 
 (defun typst-overlay--artifact-reusable-p (record element artifact)
   "Return non-nil if ARTIFACT, RECORD's, can be shown for ELEMENT.
@@ -990,7 +995,8 @@ has moved, and checking the disk for each of them is slow."
   state        ;; 'rendering 'visible 'stale 'failed
   overlay      ;; Emacs overlay or nil
   artifact     ;; typst-overlay-artifact or nil
-  generation)  ;; integer: guards async staleness
+  generation   ;; integer: guards async staleness
+  deps)        ;; ((FILE . HASH) ...) a failed compile read
 
 (cl-defstruct typst-overlay-registry
   records      ;; hash table: occurrence-key -> typst-overlay-record
@@ -1734,7 +1740,7 @@ ARTIFACT-CACHE receives the results.  SESSION is the
            (when (buffer-live-p buffer)
              (with-current-buffer buffer
                (typst-overlay--finish-batch
-                jobs (cdr source) dir ok output artifact-cache session)))
+                jobs (cdr source) dir root ok output artifact-cache session)))
          (delete-directory dir t))))))
 
 (defun typst-overlay--font-args ()
@@ -1747,14 +1753,17 @@ See `typst-overlay-system-fonts' and `typst-overlay-font-paths'."
 
 (defun typst-overlay--compile-async (source dir callback)
   "Compile SOURCE asynchronously to one SVG per page in DIR.
-Pages are written as 1.svg, 2.svg, and so on.  CALLBACK receives
-whether the compile succeeded and typst's output."
+Pages are written as 1.svg, 2.svg, and so on, and the files it read
+to deps.json, if typst can; see `typst-overlay--deps-supported-p'.
+CALLBACK receives whether the compile succeeded and typst's output."
   (let* ((buffer (generate-new-buffer " *typst-overlay-compile*" t))
          (proc (make-process
                 :name "typst-overlay-compile"
                 :buffer buffer
                 :command `("typst" "compile" "--diagnostic-format" "short"
                            "--format" "svg" ,@(typst-overlay--font-args)
+                           ,@(and (typst-overlay--deps-supported-p)
+                                  (list "--deps" (expand-file-name "deps.json" dir)))
                            "-" ,(expand-file-name "{p}.svg" dir))
                 :connection-type 'pipe
                 :noquery t
@@ -1772,9 +1781,10 @@ whether the compile succeeded and typst's output."
     (process-send-eof proc)
     proc))
 
-(defun typst-overlay--finish-batch (jobs lines dir ok output artifact-cache session)
+(defun typst-overlay--finish-batch (jobs lines dir root ok output artifact-cache session)
   "Handle a finished batch of JOBS, with LINES from its source.
-DIR holds its pages, OK and OUTPUT are the compile result.
+DIR holds its pages and the files it read, OK and OUTPUT are the
+compile result, and ROOT is the folder typst ran in.
 ARTIFACT-CACHE receives the results.  Batches from before a teardown,
 whose SESSION is outdated, are ignored."
   (if (/= session typst-overlay--session)
@@ -1783,6 +1793,7 @@ whose SESSION is outdated, are ignored."
     (cl-decf typst-overlay--active-compiles)
     (typst-overlay--warn-unknown-fonts output)
     (let* ((pages (typst-overlay--batch-pages dir))
+           (deps (typst-overlay--batch-deps dir root))
            (errors (and (not ok) (typst-overlay--compile-errors output)))
            (location (car errors))
            failed)
@@ -1793,14 +1804,15 @@ whose SESSION is outdated, are ignored."
                  for page from 1
                  do (rename-file (alist-get page pages)
                                  (typst-overlay-job-svg-path job) t)
-                    (typst-overlay--finish-job job artifact-cache nil)))
+                    (typst-overlay--write-deps (typst-overlay-job-svg-path job) deps)
+                    (typst-overlay--finish-job job artifact-cache deps nil)))
        ;; A traceable error: fail those jobs, compile the rest again.
        ((and location
              (setq failed (typst-overlay--failed-jobs
                            jobs lines (car location))))
         (dolist (job failed)
           (typst-overlay--finish-job
-           job artifact-cache
+           job artifact-cache deps
            (or (typst-overlay--job-error
                 errors (nth (cl-position job jobs) lines))
                (cdr location))))
@@ -1813,7 +1825,7 @@ whose SESSION is outdated, are ignored."
           (typst-overlay--queue-batch (list job) artifact-cache)))
        (t
         (typst-overlay--finish-job
-         (car jobs) artifact-cache
+         (car jobs) artifact-cache deps
          (or (typst-overlay--job-error errors (car lines))
              (typst-overlay--compile-error-summary output))))))
     (typst-overlay--drain-compile-queue)
@@ -1846,18 +1858,20 @@ is warned about once."
     (set-marker (car markers) nil)
     (set-marker (cdr markers) nil)))
 
-(defun typst-overlay--finish-job (job artifact-cache error)
+(defun typst-overlay--finish-job (job artifact-cache deps error)
   "Show the result of JOB for each of its equations: its SVG, or ERROR.
-ERROR is nil for a successful result, which ARTIFACT-CACHE receives."
+ERROR is nil for a successful result, which ARTIFACT-CACHE receives.
+DEPS are the files its batch read, as `typst-overlay--batch-deps'
+returns them, kept so it is compiled again when one changes."
   (pcase-dolist (`(,element . ,markers) (typst-overlay-job-occurrences job))
     (let ((current (typst-overlay--relocate-element element markers)))
       (if error
           (typst-overlay--handle-render-failure
-           element current (typst-overlay-job-generation job) error)
+           element current (typst-overlay-job-generation job) error deps)
         (typst-overlay--handle-render-success
          element current (typst-overlay-job-generation job)
          (typst-overlay-element-cache-key element)
-         (typst-overlay-job-svg-path job) artifact-cache))))
+         (typst-overlay-job-svg-path job) artifact-cache deps))))
   (typst-overlay--release-job job))
 
 (defun typst-overlay--element-markers (element)
@@ -1881,16 +1895,17 @@ made when ELEMENT's render started."
         current))))
 
 (defun typst-overlay--handle-render-success
-    (element current generation cache-key svg-path artifact-cache)
+    (element current generation cache-key svg-path artifact-cache deps)
   "Commit successful render for ELEMENT if GENERATION is still current.
 CURRENT is ELEMENT at its position now, or nil if its text changed
 while compiling; then the artifact is kept for the next refresh.
-CACHE-KEY, SVG-PATH and ARTIFACT-CACHE describe the new artifact."
+CACHE-KEY, SVG-PATH, ARTIFACT-CACHE and DEPS describe the new artifact."
   (when typst-overlay-mode
     (let* ((record (typst-overlay--get-record typst-overlay--registry element))
            (artifact (make-typst-overlay-artifact
                       :cache-key cache-key
-                      :svg-path svg-path)))
+                      :svg-path svg-path
+                      :deps deps)))
       (puthash cache-key artifact artifact-cache)
       (when (and record
                  (= (typst-overlay-record-generation record) generation))
@@ -1913,18 +1928,21 @@ CACHE-KEY, SVG-PATH and ARTIFACT-CACHE describe the new artifact."
         (car lines)
         "Compilation failed")))
 
-(defun typst-overlay--handle-render-failure (element current generation message)
+(defun typst-overlay--handle-render-failure (element current generation message
+                                                    &optional deps)
   "Mark ELEMENT failed if its record still matches GENERATION.
 CURRENT is ELEMENT at its position now, or nil if its text changed
 while compiling.  If CURRENT is non-nil, underline it with face
 `typst-overlay-error' and attach the error MESSAGE, which is shown
-when point enters the equation."
+when point enters the equation.  DEPS are the files the failed compile
+read, so it is compiled again when one changes, or is created."
   (when typst-overlay-mode
     (let ((record (typst-overlay--get-record typst-overlay--registry element)))
       (when (and record
                  (= (typst-overlay-record-generation record) generation))
         (typst-overlay--delete-record-overlay record)
         (setf (typst-overlay-record-state record) 'failed
+              (typst-overlay-record-deps record) deps
               (typst-overlay-record-overlay record)
               (and current
                    (typst-overlay--place-error-overlay current message)))))))
@@ -2041,6 +2059,134 @@ within the length Windows allows."
       (make-directory cache-dir t))
     (expand-file-name (concat cache-key ".svg") cache-dir)))
 
+;; dependencies
+;;
+;; An equation's image depends on the files its compile read: those its
+;; prelude imports, and those they import or read in turn.  typst says
+;; which with --deps, so each image keeps them, with a hash of each, in
+;; a .deps file next to its SVG.  An image whose files changed is no
+;; longer shown, and its equation is compiled again.  Which job read
+;; which file is not known, so every job of a batch keeps all of the
+;; files the batch read.
+
+(defvar typst-overlay--deps-supported 'unknown
+  "Whether the typst on PATH can write the files it read, or `unknown'.")
+
+(defun typst-overlay--deps-version-p (version)
+  "Return non-nil if typst VERSION, as `typst --version' prints it, has --deps.
+It was added in typst 0.14.0."
+  (and (string-match "\\`typst \\([0-9]+\\)\\.\\([0-9]+\\)" version)
+       (version-list-<= '(0 14)
+                        (list (string-to-number (match-string 1 version))
+                              (string-to-number (match-string 2 version))))))
+
+(defun typst-overlay--deps-supported-p ()
+  "Return non-nil if typst can write the files it read.
+Checked once a session.  Without it, images are kept until the code
+or files their cache key covers change."
+  (when (eq typst-overlay--deps-supported 'unknown)
+    (setq typst-overlay--deps-supported
+          (typst-overlay--deps-version-p
+           (or (car (process-lines-ignore-status "typst" "--version")) ""))))
+  typst-overlay--deps-supported)
+
+(defun typst-overlay--batch-deps (dir root)
+  "Return the files a batch read, from deps.json in DIR, with their hashes.
+The result is ((FILE . HASH) ...), FILE an absolute path.  typst wrote
+them relative to ROOT, the folder it ran in; the source it read from
+stdin is left out.  Return nil if there is no deps.json."
+  (let ((file (expand-file-name "deps.json" dir)))
+    (when (file-readable-p file)
+      (let ((json-array-type 'list))
+        (mapcan (lambda (input)
+                  (unless (equal input "<stdin>")
+                    (let ((path (expand-file-name input root)))
+                      (list (cons path (typst-overlay--current-hash path))))))
+                (alist-get 'inputs (json-read-file file)))))))
+
+(defun typst-overlay--deps-path (svg-path)
+  "Return where the files the image SVG-PATH was compiled from are kept."
+  (concat (file-name-sans-extension svg-path) ".deps"))
+
+(defun typst-overlay--write-deps (svg-path deps)
+  "Keep DEPS, the files the image SVG-PATH was compiled from, next to it."
+  (let ((file (typst-overlay--deps-path svg-path)))
+    (if deps
+        (with-temp-file file
+          (let ((print-length nil) (print-level nil))
+            (prin1 deps (current-buffer))))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(defun typst-overlay--artifact-deps (artifact)
+  "Return the files ARTIFACT was compiled from, reading them once."
+  (let ((deps (typst-overlay-artifact-deps artifact)))
+    (if (not (eq deps 'unread))
+        deps
+      (setf (typst-overlay-artifact-deps artifact)
+            (let ((file (typst-overlay--deps-path
+                         (typst-overlay-artifact-svg-path artifact))))
+              (when (file-readable-p file)
+                (with-temp-buffer
+                  (insert-file-contents file)
+                  (condition-case nil
+                      (read (current-buffer))
+                    ;; A broken file says nothing about what changed.
+                    ((end-of-file invalid-read-syntax) nil)))))))))
+
+(defvar typst-overlay--file-hashes (make-hash-table :test #'equal)
+  "Hash of each file read, by path: ((MTIME . SIZE) . HASH).")
+
+(defvar typst-overlay--refresh-hashes nil
+  "Hash of each file checked in the current refresh, by path, or nil.
+So a file many equations read is checked once.")
+
+(defun typst-overlay--current-hash (file)
+  "Return a hash of FILE's contents, or \"none\" if it cannot be read.
+It is read again only if its modification time or size changed, so
+checking the files of many images, such as a package's, stays fast."
+  (or (and typst-overlay--refresh-hashes
+           (gethash file typst-overlay--refresh-hashes))
+      (let* ((attributes (file-attributes file))
+             (stamp (and attributes
+                         (cons (file-attribute-modification-time attributes)
+                               (file-attribute-size attributes))))
+             (cached (gethash file typst-overlay--file-hashes))
+             (hash (cond ((null stamp) "none")
+                         ((equal (car cached) stamp) (cdr cached))
+                         (t (let ((hash (typst-overlay--file-hash file)))
+                              (puthash file (cons stamp hash) typst-overlay--file-hashes)
+                              hash)))))
+        (when typst-overlay--refresh-hashes
+          (puthash file hash typst-overlay--refresh-hashes))
+        hash)))
+
+(defun typst-overlay--deps-fresh-p (deps)
+  "Return non-nil if every file in DEPS still has its hash.
+DEPS is ((FILE . HASH) ...), as `typst-overlay--batch-deps' returns."
+  (seq-every-p (pcase-lambda (`(,file . ,hash))
+                 (equal (typst-overlay--current-hash file) hash))
+               deps))
+
+(defun typst-overlay--invalidate-changed-deps ()
+  "Remove the overlays of equations whose files changed.
+Their records are marked stale, so they are compiled again.  That is
+an image, whose artifact's files changed, or a failure, whose compile
+read a file that changed since, or was missing and is there now."
+  (when typst-overlay--registry
+    (maphash
+     (lambda (_key record)
+       (let ((deps (pcase (typst-overlay-record-state record)
+                     ('visible (when-let* ((artifact (typst-overlay-record-artifact record)))
+                                 (typst-overlay--artifact-deps artifact)))
+                     ('failed (typst-overlay-record-deps record)))))
+         (when (and deps
+                    (typst-overlay-record-overlay record)
+                    (not (typst-overlay--deps-fresh-p deps)))
+           (typst-overlay--delete-record-overlay record)
+           (setf (typst-overlay-record-state record) 'stale))))
+     (typst-overlay-registry-records typst-overlay--registry))))
+
 (defvar typst-overlay--used-images (make-hash-table :test #'equal)
   "Cached images marked as used this session, by path.")
 
@@ -2083,7 +2229,10 @@ Folders that cannot be written to are left as they are."
           (dolist (file (directory-files folder t typst-overlay--cache-image-regexp))
             (when (time-less-p (file-attribute-modification-time (file-attributes file))
                                limit)
-              (delete-file file)))
+              (delete-file file)
+              (let ((deps (typst-overlay--deps-path file)))
+                (when (file-exists-p deps)
+                  (delete-file deps)))))
           (when (and (directory-empty-p folder)
                      (file-writable-p typst-overlay-cache-directory))
             (delete-directory folder)))))))
@@ -2107,7 +2256,8 @@ Folders that cannot be written to are left as they are."
   (unless typst-overlay-mode
     (user-error "Mode typst-overlay-mode not active"))
   (typst-overlay--ensure-runtime)
-  (let* ((old-snapshot (or typst-overlay--snapshot
+  (let* ((typst-overlay--refresh-hashes (make-hash-table :test #'equal))
+         (old-snapshot (or typst-overlay--snapshot
                            (make-typst-overlay-snapshot)))
          ;; The whole buffer, even when narrowed, or every equation
          ;; outside the narrowing would lose its overlay.
@@ -2120,6 +2270,7 @@ Folders that cannot be written to are left as they are."
                           typst-overlay--registry))))
     (typst-overlay--invalidate-overlays-past-error
      (typst-overlay-analysis-first-error analysis))
+    (typst-overlay--invalidate-changed-deps)
     (let ((plan (typst-overlay--plan-render
                  diff
                  typst-overlay--registry
