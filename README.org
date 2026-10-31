@@ -61,7 +61,7 @@ Equations that fail to render get a dotted red underline (face =typst-overlay-er
 Each equation is compiled with the =#let=, =#import= and =#include= code before it, as Typst would see it, so it can use the functions and variables defined there. In Typst buffers that is the code written before the equation, in its scope. In org buffers it is the code in the Typst export blocks before it:
 
 #+BEGIN_HTML
-<p align="center"><img src="images/definitions.png" width="396" alt="A Typst export block defining bvec, and an equation after it that uses it, rendered"></p>
+<p align="center"><img src="images/definitions.png" width="450" alt="A Typst export block defining bvec, and two equations after it that use it: the first with point in it, showing its source and preview, the second rendered"></p>
 #+END_HTML
 
 Other blocks, such as =#+begin_src typst=, are left out, and so is other code in the export blocks, such as =#set= rules, which would change how every equation is drawn. Org passes an export block through only to the exporter it names, so an exporter to Typst puts these definitions in the document, and other exporters leave them out.
