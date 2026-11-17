@@ -419,14 +419,17 @@ PRELUDE, if non-nil, is the code of its prelude."
       (cl-flet ((line (n) (aref source-lines (1- n))))
         (should (= (length lines) 2))
         (pcase-let ((`(,first ,second) lines))
+          ;; Each prelude is checked before the first job with it.
+          (pcase-let ((`(,beg . ,end) (typst-overlay-job-lines-check first)))
+            (should (equal (line beg) "#let typst-overlay-prelude = ["))
+            (should (equal (line (1- end)) "#let f = 2"))
+            (should (= (1+ end) (typst-overlay-job-lines-beg first))))
           (should (equal (line (typst-overlay-job-lines-beg first)) "#["))
-          (should (equal (line (typst-overlay-job-lines-prelude-end first))
-                         "#let f = 2"))
           (should (equal (line (typst-overlay-job-lines-end first)) "]"))
           (should (equal (line (1+ (typst-overlay-job-lines-end first)))
                          "#pagebreak()"))
-          (should (equal (line (typst-overlay-job-lines-prelude-end second))
-                         "#let k = 1"))
+          (should (equal (line (1- (car (typst-overlay-job-lines-check second))))
+                         "#pagebreak()"))
           (should (equal (line (- (typst-overlay-job-lines-end second) 3)) "$]"))
           (should (equal (line (typst-overlay-job-lines-end second)) "]")))))))
 
@@ -496,11 +499,15 @@ PRELUDE, if non-nil, is the code of its prelude."
       ;; An error on a job's "#[" line belongs to that job only, even
       ;; when it has no prelude.
       (should (equal (failed 1 #'typst-overlay-job-lines-beg) '("$b$")))
-      ;; An error in its math belongs to that job only.
+      ;; An error in its block belongs to that job only, even on a
+      ;; line of its prelude.
       (should (equal (failed 2 #'typst-overlay-job-lines-end) '("$c$")))
-      ;; An error in a prelude fails every job sharing it.
-      (should (equal (failed 2 #'typst-overlay-job-lines-prelude-end)
-                     '("$c$" "$d$"))))))
+      (should (equal (failed 3 (lambda (lines) (1+ (typst-overlay-job-lines-beg lines))))
+                     '("$d$")))
+      ;; An error in the check of a prelude fails every job sharing it.
+      (should (equal (failed 2 (lambda (lines) (car (typst-overlay-job-lines-check lines))))
+                     '("$c$" "$d$")))
+      (should-not (typst-overlay-job-lines-check (nth 3 lines))))))
 
 (ert-deftest typst-overlay-test-job-error ()
   "A job's error is the innermost one reported within its lines."
@@ -515,10 +522,10 @@ PRELUDE, if non-nil, is the code of its prelude."
                             (11 . "unclosed string")
                             (20 . "elsewhere"))))
     (should (equal (typst-overlay--job-error
-                    errors (make-typst-overlay-job-lines :beg 10 :prelude-end 10 :end 12))
+                    errors (make-typst-overlay-job-lines :beg 10 :end 12))
                    "unclosed string"))
     (should-not (typst-overlay--job-error
-                 errors (make-typst-overlay-job-lines :beg 13 :prelude-end 13 :end 15)))))
+                 errors (make-typst-overlay-job-lines :beg 13 :end 15)))))
 
 (defun typst-overlay-test--error-at (marker message)
   "Return a fake typst that fails at the first line containing MARKER.
@@ -657,7 +664,8 @@ and `compiled' the equations compiled, in order."
                      "unknown variable: BAD")))))
 
 (ert-deftest typst-overlay-test-batch-broken-prelude ()
-  "A broken prelude fails every equation sharing it, without retries."
+  "A broken prelude fails every equation sharing it, without retries.
+A bad call of a function it defines fails only the equation calling it."
   (skip-unless (treesit-language-available-p 'typst))
   (let ((typst-overlay-max-active-compiles 8)
         (typst-overlay-extra-prelude "#import \"BROKEN.typ\": *"))
@@ -665,7 +673,27 @@ and `compiled' the equations compiled, in order."
         (typst-overlay-test--error-at "BROKEN" "file not found")
       (run-compiles)
       (should (equal batches '(3 3 3 3 3 3 2)))
-      (should (= (length (typst-overlay-test--overlays 'typst-overlay-error)) 20)))))
+      (should (= (length (typst-overlay-test--overlays 'typst-overlay-error)) 20))))
+  (let ((typst-overlay-max-active-compiles 8))
+    (typst-overlay-test--with-batches
+        (concat "#+begin_export typst\n#let f(x) = 1 + x\n#+end_export\n\n"
+                (replace-regexp-in-string "x_5" "#f(\"CALL\")"
+                                          (typst-overlay-test--equations 20) t t))
+        ;; As typst does, report the error where it happens, in the
+        ;; body of f, in the block of the equation that calls it.
+        (lambda (source)
+          (let* ((lines (split-string source "\n"))
+                 (call (cl-position-if (lambda (line) (string-search "CALL" line))
+                                       lines))
+                 (body (and call
+                            (cl-position-if (lambda (line) (string-search "#let f" line))
+                                            lines :end call :from-end t))))
+            (and body (format "<stdin>:%d:13: error: cannot add integer and string\n"
+                              (1+ body)))))
+      (run-compiles)
+      (should (equal (typst-overlay-test--overlays 'typst-overlay-error)
+                     '("$#f(\"CALL\")$")))
+      (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 19)))))
 
 (ert-deftest typst-overlay-test-batch-untraceable-error ()
   "An error without a location falls back to one compile per equation."

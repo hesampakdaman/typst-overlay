@@ -1496,6 +1496,13 @@ Each image keeps its SVG data, so nothing is read or compiled."
 ;; which prelude, shared by every equation that uses it.  Those are
 ;; marked failed and the rest is compiled again.  An error that cannot
 ;; be traced falls back to compiling each equation on its own.
+;;
+;; An error on a line of an equation's prelude does not tell the two
+;; apart: typst reports a bad call of a function, as in $#f("a")$,
+;; in the body of the function.  So each prelude is first evaluated on
+;; its own, in a check before the first equation that uses it.  An
+;; error in the check is the prelude's; one in an equation's block,
+;; even on a line of its prelude, is that equation's.
 
 (defconst typst-overlay--source-header
   (concat "#set page(width: auto, height: auto, margin: 1pt, fill: none)\n"
@@ -1521,57 +1528,78 @@ Each image keeps its SVG data, so nothing is read or compiled."
 
 (cl-defstruct typst-overlay-job-lines
   beg          ;; first line of the job's block
-  prelude-end  ;; last line of its prelude, or BEG if it has none
-  end)         ;; last line of its block
+  end          ;; last line of its block
+  check)       ;; (BEG . END) lines of the prelude check before it, or nil
 
-(defun typst-overlay--job-block (element &optional dir root)
-  "Return (BLOCK . PRELUDE-LINES) for ELEMENT.
-BLOCK is a Typst block rendering ELEMENT with its prelude, ending in
-a newline.  PRELUDE-LINES is how many lines its prelude takes.
+(defun typst-overlay--job-prelude (element &optional dir root)
+  "Return the prelude ELEMENT is compiled with, ending in a newline.
+That is `typst-overlay-extra-prelude' and then its own, or \"\" if
+both are empty.
 
 If DIR and ROOT are given, the relative paths the prelude imports
 from DIR are made absolute in ROOT, see `typst-overlay--root-paths'."
-  (let* ((prelude (concat
-                   (unless (string-empty-p typst-overlay-extra-prelude)
-                     (concat typst-overlay-extra-prelude "\n"))
-                   (let ((text (typst-overlay-element-prelude-text element)))
-                     (unless (string-empty-p text)
-                       (concat text "\n")))))
-         (prelude (if (and dir root)
-                      (typst-overlay--root-paths prelude dir root)
-                    prelude)))
-    (cons (concat "#[\n"
-                  prelude
-                  ;; Number each equation as if compiled on its own.
-                  "#counter(math.equation).update(0)\n"
-                  ;; On the same lines as the equation, so line
-                  ;; numbers in its errors still point at it.
-                  "#let typst-overlay-math = [" (typst-overlay-element-text element) "]\n"
-                  "#typst-overlay-math\n"
-                  "#typst-overlay-depth(typst-overlay-math)\n"
-                  "]\n")
-          (cl-count ?\n prelude))))
+  (let ((prelude (concat
+                  (unless (string-empty-p typst-overlay-extra-prelude)
+                    (concat typst-overlay-extra-prelude "\n"))
+                  (let ((text (typst-overlay-element-prelude-text element)))
+                    (unless (string-empty-p text)
+                      (concat text "\n"))))))
+    (if (and dir root)
+        (typst-overlay--root-paths prelude dir root)
+      prelude)))
+
+(defun typst-overlay--job-block (element prelude)
+  "Return a Typst block rendering ELEMENT with PRELUDE.
+PRELUDE is from `typst-overlay--job-prelude'.  The block ends in a
+newline."
+  (concat "#[\n"
+          prelude
+          ;; Number each equation as if compiled on its own.
+          "#counter(math.equation).update(0)\n"
+          ;; On the same lines as the equation, so line
+          ;; numbers in its errors still point at it.
+          "#let typst-overlay-math = [" (typst-overlay-element-text element) "]\n"
+          "#typst-overlay-math\n"
+          "#typst-overlay-depth(typst-overlay-math)\n"
+          "]\n"))
+
+(defun typst-overlay--prelude-check (prelude)
+  "Return Typst code that evaluates PRELUDE and draws nothing.
+An error in it is PRELUDE's own, such as a file it imports that is
+missing, and not that of an equation using it.  Ends in a newline."
+  (concat "#let typst-overlay-prelude = [\n" prelude "]\n"))
 
 (defun typst-overlay--batch-source (jobs &optional dir root)
   "Return (SOURCE . LINES) for compiling JOBS as one document.
 LINES has a `typst-overlay-job-lines' per job, in order, telling
 which lines of SOURCE belong to it.  DIR and ROOT are passed on to
-`typst-overlay--job-block'."
+`typst-overlay--job-prelude'.
+
+Before the first job with each prelude comes a check of that prelude,
+see `typst-overlay--prelude-check'."
   (let ((parts (list typst-overlay--source-header))
         (line (1+ (cl-count ?\n typst-overlay--source-header)))
-        lines)
+        checked lines)
     (dolist (job jobs)
       (unless (eq job (car jobs))
         (push "#pagebreak()\n" parts)
         (cl-incf line))
-      (pcase-let ((`(,block . ,prelude-lines)
-                   (typst-overlay--job-block (typst-overlay-job-element job)
-                                             dir root)))
+      (let* ((element (typst-overlay-job-element job))
+             (prelude (typst-overlay--job-prelude element dir root))
+             (prelude-hash (typst-overlay-element-prelude-hash element))
+             (block (typst-overlay--job-block element prelude))
+             check)
+        (unless (or (string-empty-p prelude) (member prelude-hash checked))
+          (push prelude-hash checked)
+          (let ((code (typst-overlay--prelude-check prelude)))
+            (push code parts)
+            (setq check (cons line (+ line (cl-count ?\n code) -1)))
+            (cl-incf line (cl-count ?\n code))))
         (push block parts)
         (push (make-typst-overlay-job-lines
                :beg line
-               :prelude-end (+ line prelude-lines)
-               :end (+ line (cl-count ?\n block) -1))
+               :end (+ line (cl-count ?\n block) -1)
+               :check check)
               lines)
         (cl-incf line (cl-count ?\n block))))
     (cons (apply #'concat (nreverse parts)) (nreverse lines))))
@@ -1633,29 +1661,30 @@ unclosed delimiters around it, so the last one is the actual cause."
 
 (defun typst-overlay--failed-jobs (jobs lines line)
   "Return the JOBS that fail because of an error at LINE, or nil.
-LINES are the jobs' `typst-overlay-job-lines'.  An error in a job's
-prelude fails every job with the same prelude."
-  (let ((index (cl-position-if
-                (lambda (job-lines)
-                  (<= (typst-overlay-job-lines-beg job-lines)
-                      line
-                      (typst-overlay-job-lines-end job-lines)))
-                lines)))
-    (when index
-      (let* ((job (nth index jobs))
-             (prelude-hash (typst-overlay-element-prelude-hash
-                            (typst-overlay-job-element job))))
-        ;; The prelude starts after the block's opening "#[" line; an
-        ;; error on that line itself comes from the job's own content.
-        (if (< (typst-overlay-job-lines-beg (nth index lines))
-               line
-               (1+ (typst-overlay-job-lines-prelude-end (nth index lines))))
-            (seq-filter (lambda (other)
-                          (equal (typst-overlay-element-prelude-hash
-                                  (typst-overlay-job-element other))
-                                 prelude-hash))
-                        jobs)
-          (list job))))))
+LINES are the jobs' `typst-overlay-job-lines'.  An error in the check
+of a prelude fails every job with that prelude.  One in a job's block
+fails that job only, even on a line of its prelude: the prelude passed
+its check, so the error comes from how the job's equation uses it."
+  (let ((checked (cl-position-if
+                  (lambda (job-lines)
+                    (when-let* ((check (typst-overlay-job-lines-check job-lines)))
+                      (<= (car check) line (cdr check))))
+                  lines)))
+    (if checked
+        (let ((prelude-hash (typst-overlay-element-prelude-hash
+                             (typst-overlay-job-element (nth checked jobs)))))
+          (seq-filter (lambda (job)
+                        (equal (typst-overlay-element-prelude-hash
+                                (typst-overlay-job-element job))
+                               prelude-hash))
+                      jobs))
+      (when-let* ((index (cl-position-if
+                          (lambda (job-lines)
+                            (<= (typst-overlay-job-lines-beg job-lines)
+                                line
+                                (typst-overlay-job-lines-end job-lines)))
+                          lines)))
+        (list (nth index jobs))))))
 
 (defun typst-overlay--batch-pages (dir)
   "Return an alist of page number to SVG file in DIR."
