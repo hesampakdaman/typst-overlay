@@ -670,8 +670,15 @@ Preludes come from Typst export blocks, see
       (while (search-forward "$" nil t)
         (let* ((beg (1- (point)))
                (limit (typst-overlay--paragraph-end))
+               (line-end (min limit (line-end-position)))
                (end (and (not (typst-overlay--escaped-p beg))
-                         (or (typst-overlay--math-end beg limit)
+                         ;; Most math ends on its line: parse only that
+                         ;; first, as parsing to the end of a long
+                         ;; paragraph, such as a table, from every $
+                         ;; grows with the square of its length.
+                         (or (typst-overlay--math-end beg line-end)
+                             (and (< line-end limit)
+                                  (typst-overlay--math-end beg limit))
                              (save-excursion
                                (typst-overlay--find-closing limit))))))
           (if (and end
