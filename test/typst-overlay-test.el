@@ -706,6 +706,31 @@ A bad call of a function it defines fails only the equation calling it."
       (should (equal batches '(2 2 1 1 1 1)))
       (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 4)))))
 
+(ert-deftest typst-overlay-test-batch-start-fails ()
+  "A compile that fails to start fails its equations and frees its slot."
+  (skip-unless (treesit-language-available-p 'typst))
+  (let ((typst-overlay-max-active-compiles 1))
+    (typst-overlay-test--with-batches "$a$ and $b$." #'ignore
+      (run-compiles)
+      ;; As when typst is no longer on PATH.
+      (cl-letf (((symbol-function 'typst-overlay--compile-async)
+                 (lambda (&rest _)
+                   (signal 'file-missing '("Searching for program"
+                                           "No such file or directory" "typst")))))
+        (goto-char (point-min))
+        (search-forward "$b$")
+        (replace-match "$c$" t t)
+        (typst-overlay-refresh))
+      (goto-char (point-min))
+      (search-forward "$a$")
+      (replace-match "$d$" t t)
+      (typst-overlay-refresh)
+      (run-compiles)
+      (should (equal (typst-overlay-test--shown) '("$d$" "$c$ failed")))
+      (should (string-search "typst" (overlay-get (car (typst-overlay-test--overlay-list
+                                                        'typst-overlay-error))
+                                                  'typst-overlay-error))))))
+
 (ert-deftest typst-overlay-test-imported-file-changed ()
   "Equations are compiled again when a file they import changes."
   (skip-unless (treesit-language-available-p 'typst))

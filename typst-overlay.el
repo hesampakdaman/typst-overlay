@@ -1762,7 +1762,11 @@ ARTIFACT-CACHE receives the results."
 (defun typst-overlay--run-batch (jobs artifact-cache buffer session)
   "Compile JOBS of BUFFER into a temporary folder in the cache.
 ARTIFACT-CACHE receives the results.  SESSION is the
-`typst-overlay--session' the batch belongs to."
+`typst-overlay--session' the batch belongs to.
+
+If the folder cannot be made or typst cannot be started, as when it
+is no longer on PATH, the batch fails at once with that error, which
+frees its compile slot and is shown on its equations."
   (let* (;; #import paths are relative to the buffer's file, or for
          ;; buffers without one, its directory.
          (file-dir (with-current-buffer buffer
@@ -1771,19 +1775,23 @@ ARTIFACT-CACHE receives the results.  SESSION is the
          (source (typst-overlay--batch-source jobs file-dir root))
          (cache-dir (file-name-directory
                      (typst-overlay-job-svg-path (car jobs))))
-         (dir (make-temp-file (expand-file-name "batch-" cache-dir) t))
+         (dir nil)
          ;; Typst takes the folder it runs in as the root of a source
          ;; read from stdin.
          (default-directory root))
-    (typst-overlay--compile-async
-     (car source) dir
-     (lambda (ok output)
-       (unwind-protect
-           (when (buffer-live-p buffer)
-             (with-current-buffer buffer
-               (typst-overlay--finish-batch
-                jobs (cdr source) dir ok output artifact-cache session)))
-         (delete-directory dir t))))))
+    (cl-flet ((finish (ok output)
+                (unwind-protect
+                    (when (buffer-live-p buffer)
+                      (with-current-buffer buffer
+                        (typst-overlay--finish-batch
+                         jobs (cdr source) dir ok output artifact-cache session)))
+                  (when dir
+                    (delete-directory dir t)))))
+      (condition-case err
+          (progn
+            (setq dir (make-temp-file (expand-file-name "batch-" cache-dir) t))
+            (typst-overlay--compile-async (car source) dir #'finish))
+        (file-error (finish nil (error-message-string err)))))))
 
 (defun typst-overlay--font-args ()
   "Return the arguments telling typst which fonts it may use.
@@ -1796,26 +1804,30 @@ See `typst-overlay-system-fonts' and `typst-overlay-font-paths'."
 (defun typst-overlay--compile-async (source dir callback)
   "Compile SOURCE asynchronously to one SVG per page in DIR.
 Pages are written as 1.svg, 2.svg, and so on.  CALLBACK receives
-whether the compile succeeded and typst's output."
+whether the compile succeeded and typst's output.  Signal an error,
+leaving nothing behind, if typst cannot be started."
   (let* ((buffer (generate-new-buffer " *typst-overlay-compile*" t))
-         (proc (make-process
-                :name "typst-overlay-compile"
-                :buffer buffer
-                :command `("typst" "compile" "--diagnostic-format" "short"
-                           "--format" "svg" ,@(typst-overlay--font-args)
-                           "-" ,(expand-file-name "{p}.svg" dir))
-                :connection-type 'pipe
-                :noquery t
-                :sentinel
-                (lambda (proc _event)
-                  (when (memq (process-status proc) '(exit signal))
-                    (unwind-protect
-                        (funcall callback
-                                 (= (process-exit-status proc) 0)
-                                 (with-current-buffer (process-buffer proc)
-                                   (buffer-string)))
-                      (when (buffer-live-p (process-buffer proc))
-                        (kill-buffer (process-buffer proc)))))))))
+         (proc (condition-case err
+                   (make-process
+                    :name "typst-overlay-compile"
+                    :buffer buffer
+                    :command `("typst" "compile" "--diagnostic-format" "short"
+                               "--format" "svg" ,@(typst-overlay--font-args)
+                               "-" ,(expand-file-name "{p}.svg" dir))
+                    :connection-type 'pipe
+                    :noquery t
+                    :sentinel
+                    (lambda (proc _event)
+                      (when (memq (process-status proc) '(exit signal))
+                        (unwind-protect
+                            (funcall callback
+                                     (= (process-exit-status proc) 0)
+                                     (with-current-buffer (process-buffer proc)
+                                       (buffer-string)))
+                          (when (buffer-live-p (process-buffer proc))
+                            (kill-buffer (process-buffer proc)))))))
+                 (error (kill-buffer buffer)
+                        (signal (car err) (cdr err))))))
     (process-send-string proc source)
     (process-send-eof proc)
     proc))
@@ -1830,7 +1842,7 @@ whose SESSION is outdated, are ignored."
         (typst-overlay--release-job job))
     (cl-decf typst-overlay--active-compiles)
     (typst-overlay--warn-unknown-fonts output)
-    (let* ((pages (typst-overlay--batch-pages dir))
+    (let* ((pages (and ok (typst-overlay--batch-pages dir)))
            (errors (and (not ok) (typst-overlay--compile-errors output)))
            (location (car errors))
            failed)
