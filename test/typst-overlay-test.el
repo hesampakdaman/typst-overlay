@@ -1390,7 +1390,8 @@ EXPECTED is the size property the image is created with.")
           (should (equal (list name expected) (list name actual))))))))
 
 (ert-deftest typst-overlay-test-rescale ()
-  "Changing the scale resizes the equations shown and the preview."
+  "Changing the scale resizes the equations shown and the preview.
+Also those outside a narrowing."
   (skip-unless (treesit-language-available-p 'typst))
   (typst-overlay-test--with-batches "Text $a$ and $b$." #'ignore
     ;; Unlike the stub the batches use, keep the scale.
@@ -1403,10 +1404,13 @@ EXPECTED is the size property the image is created with.")
         (goto-char (point-min))
         (search-forward "$b")
         (typst-overlay--post-command-update)
+        ;; Narrowed to $b$.
+        (narrow-to-region (- (point) 2) (point-max))
         (setq typst-overlay-scale 2.0)
         ;; As once Emacs is idle.
         (while typst-overlay--resize-timer
           (accept-process-output nil 0.01))
+        (widen)
         (cl-flet ((scale (image) (plist-get (cdr image) :scale)))
           (dolist (overlay (typst-overlay-test--overlay-list 'typst-overlay))
             (should (equal (scale (overlay-get overlay 'typst-overlay-image)) 2.0))
