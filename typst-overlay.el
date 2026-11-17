@@ -2236,6 +2236,7 @@ put point where they meant to."
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
   (add-hook 'after-change-functions #'typst-overlay--schedule-refresh nil t)
   (add-hook 'change-major-mode-hook #'typst-overlay--turn-off nil t)
+  (add-hook 'clone-indirect-buffer-hook #'typst-overlay--set-up-clone nil t)
   (add-hook 'eglot-managed-mode-hook #'typst-overlay--add-flymake-backend nil t)
   (add-hook 'eldoc-documentation-functions #'typst-overlay--eldoc nil t)
   ;; Org buffers, for one, have no ElDoc function until now.
@@ -2251,11 +2252,42 @@ would leave the overlays in the buffer with nothing keeping track of
 them, shown again on top by the next `typst-overlay-mode'."
   (typst-overlay-mode -1))
 
+(defun typst-overlay--set-up-clone ()
+  "Give an indirect clone of a buffer its own overlays and state.
+For `clone-indirect-buffer-hook', which runs in the clone.  A clone,
+such as the buffer of `org-capture', starts with copies of the
+overlays and with the very registry of the buffer it was cloned from,
+so a refresh in one would move and delete the records of the other,
+which then puts a second overlay on its equations.
+
+Only the artifact cache stays shared: it maps cache keys to files,
+whichever buffer rendered them, so an equation compiled in the clone
+is not compiled again in the other buffer."
+  (when typst-overlay-mode
+    (save-restriction
+      (widen)
+      (dolist (overlay (overlays-in (point-min) (point-max)))
+        (when (or (overlay-get overlay 'typst-overlay)
+                  (overlay-get overlay 'typst-overlay-error)
+                  ;; The preview.
+                  (overlay-get overlay 'typst-overlay-source))
+          (delete-overlay overlay))))
+    (setq typst-overlay--snapshot nil
+          typst-overlay--registry nil
+          typst-overlay--active-overlay nil
+          typst-overlay--preview nil
+          typst-overlay--compile-queue nil
+          typst-overlay--active-compiles 0
+          typst-overlay--idle-timer nil
+          typst-overlay--flymake-report-fn nil)
+    (typst-overlay-refresh)))
+
 (defun typst-overlay--disable ()
   "Tear down `typst-overlay-mode' in the current buffer."
   (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
   (remove-hook 'after-change-functions #'typst-overlay--schedule-refresh t)
   (remove-hook 'change-major-mode-hook #'typst-overlay--turn-off t)
+  (remove-hook 'clone-indirect-buffer-hook #'typst-overlay--set-up-clone t)
   (typst-overlay--cancel-idle-refresh)
   (kill-local-variable 'typst-overlay--last-point)
   (typst-overlay--teardown)
