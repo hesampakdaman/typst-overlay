@@ -1452,7 +1452,10 @@ Each image keeps its SVG data, so nothing is read or compiled."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when typst-overlay-mode
-        (dolist (overlay (overlays-in (point-min) (point-max)))
+        ;; The whole buffer, even when narrowed.
+        (dolist (overlay (save-restriction
+                           (widen)
+                           (overlays-in (point-min) (point-max))))
           (when-let* ((image (overlay-get overlay 'typst-overlay-image)))
             (let ((resized (typst-overlay--create-image (plist-get (cdr image) :data))))
               (overlay-put overlay 'typst-overlay-image resized)
