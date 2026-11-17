@@ -759,8 +759,9 @@ and `compiled' the equations compiled, in order."
 ;; compile.  A step is (insert POS STRING), (replace FROM TO) for the
 ;; first FROM, `refresh', `run', `run-newest-first' (compiles finish
 ;; out of order), `delete-images' (the cache folder's SVGs are deleted),
-;; `reopen' (the mode is turned off and on) or (typst-version VERSION)
-;; (typst says it is VERSION from now on).  COMPILED is the
+;; `reopen' (the mode is turned off and on), `remode' (the major mode
+;; is set again, then the mode turned on, as its hook would) or
+;; (typst-version VERSION) (typst says it is VERSION from now on).  COMPILED is the
 ;; equations compiled during STEPS, in order.  SHOWN describes each
 ;; equation's overlay in buffer order: its text when it shows its own
 ;; image, "TEXT showing OTHER" for another equation's image, and
@@ -789,6 +790,8 @@ and `compiled' the equations compiled, in order."
      "$a$ and $b$" ((replace "$b$" "$c$") (replace "$c$" "$b$")) () ("$a$" "$b$"))
     ("reopened: images loaded from the cache folder"
      "$a$ and $b$" (reopen) () ("$a$" "$b$"))
+    ("major mode set again: overlays not doubled"
+     "$a$ and $b$" (remode) () ("$a$" "$b$"))
     ("images deleted from disk, then moved: overlays kept, nothing read"
      "$a$ and $b$" (delete-images (insert 1 "New. ")) () ("$a$" "$b$"))
     ("images deleted from disk, edited and restored: compiled again"
@@ -861,6 +864,7 @@ See `typst-overlay-test--edit-cases'."
              (dolist (file (directory-files-recursively dir "\\.svg\\'"))
                (delete-file file)))
             ('reopen (typst-overlay-mode -1) (typst-overlay-mode 1))
+            ('remode (org-mode) (typst-overlay-mode 1))
             (`(typst-version ,version) (setq typst-overlay-test--typst-version version))))
         (should (equal (list name expected-compiled expected-shown)
                        (list name compiled (typst-overlay-test--shown))))))))

@@ -2235,6 +2235,7 @@ put point where they meant to."
   (setq typst-overlay--last-point (point))
   (add-hook 'post-command-hook #'typst-overlay--post-command-update nil t)
   (add-hook 'after-change-functions #'typst-overlay--schedule-refresh nil t)
+  (add-hook 'change-major-mode-hook #'typst-overlay--turn-off nil t)
   (add-hook 'eglot-managed-mode-hook #'typst-overlay--add-flymake-backend nil t)
   (add-hook 'eldoc-documentation-functions #'typst-overlay--eldoc nil t)
   ;; Org buffers, for one, have no ElDoc function until now.
@@ -2243,10 +2244,18 @@ put point where they meant to."
   (typst-overlay-refresh)
   (typst-overlay--add-flymake-backend))
 
+(defun typst-overlay--turn-off ()
+  "Turn `typst-overlay-mode' off, for `change-major-mode-hook'.
+A major mode starts by killing the buffer's local variables, which
+would leave the overlays in the buffer with nothing keeping track of
+them, shown again on top by the next `typst-overlay-mode'."
+  (typst-overlay-mode -1))
+
 (defun typst-overlay--disable ()
   "Tear down `typst-overlay-mode' in the current buffer."
   (remove-hook 'post-command-hook #'typst-overlay--post-command-update t)
   (remove-hook 'after-change-functions #'typst-overlay--schedule-refresh t)
+  (remove-hook 'change-major-mode-hook #'typst-overlay--turn-off t)
   (typst-overlay--cancel-idle-refresh)
   (kill-local-variable 'typst-overlay--last-point)
   (typst-overlay--teardown)
