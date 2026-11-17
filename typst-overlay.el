@@ -25,8 +25,9 @@
 ;;
 ;; Usage:
 ;;
-;;   M-x typst-overlay-mode      enable in the current buffer
-;;   M-x typst-overlay-refresh   re-render overlays manually
+;;   M-x typst-overlay-mode          enable in the current buffer
+;;   M-x typst-overlay-refresh       re-render overlays manually
+;;   C-u M-x typst-overlay-refresh   compile every equation again
 ;;
 ;; Edited equations are rendered again once you stop typing; see
 ;; `typst-overlay-idle-refresh-delay'.
@@ -716,6 +717,7 @@ their images differ, such as writing their depth to the SVG.")
 
 (defun typst-overlay--typst-version ()
   "Return what `typst --version' prints, asking once a session.
+It is asked again after a forced `typst-overlay-refresh'.
 Part of every cache key, so equations are compiled again after typst
 is upgraded, whose images may differ.  It includes the commit, which
 changes with every build of typst from source."
@@ -2192,11 +2194,26 @@ Folders that cannot be written to are left as they are."
      (typst-overlay-registry-records typst-overlay--registry))))
 
 ;; loop
-(defun typst-overlay-refresh ()
-  "Refresh Typst overlays for the current buffer."
-  (interactive)
+(defun typst-overlay-refresh (&optional force)
+  "Refresh Typst overlays for the current buffer.
+Only equations that changed are compiled again.
+
+With a prefix argument FORCE, every equation is compiled again,
+without the images cached for it, and the version of typst is read
+again.  This retries equations that failed for a reason outside the
+buffer, such as a package that could not be downloaded, and redraws
+those that depend on something the cache does not track, such as a
+font installed since, or typst upgraded while Emacs runs.  Their
+source is shown until they are compiled."
+  (interactive "P")
   (unless typst-overlay-mode
     (user-error "Mode typst-overlay-mode not active"))
+  (when force
+    (setq typst-overlay--typst-version-line nil)
+    (typst-overlay--teardown)
+    ;; Empty, rather than read from the cache folder, so that no image
+    ;; is reused.
+    (setq typst-overlay--artifact-cache (typst-overlay--make-artifact-cache)))
   (typst-overlay--ensure-runtime)
   (let* ((old-snapshot (or typst-overlay--snapshot
                            (make-typst-overlay-snapshot)))
