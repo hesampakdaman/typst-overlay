@@ -66,6 +66,8 @@ Starting =typst= costs far more than compiling an equation, so =typst-overlay--s
 
 When a batch fails, typst reports only its first error and writes no pages. =typst-overlay--finish-batch= works out from the error's line which job failed, or which prelude (failing every job that shares it), and compiles the rest again. An error it cannot trace falls back to compiling each job on its own.
 
+An error on a line of a job's prelude could be either: typst reports a bad call of a function, as in =$#f("a")$=, in the function's body. So the document evaluates each prelude on its own first (=typst-overlay--prelude-check=), before the first job that uses it. An error in that check fails every job sharing the prelude; an error in a job's block fails that job alone.
+
 Results are placed by =typst-overlay--finish-job=. Each job carries markers for its equations, made when the compile started, so the result lands where the equation is now. If the equation's text changed in the meantime, the image is cached but not shown.
 
 *** =;; flymake=
