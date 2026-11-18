@@ -836,7 +836,8 @@ refresh, so the equation is rendered once typst can start."
 ;; Each case is (NAME TEXT STEPS COMPILED SHOWN).  TEXT is rendered,
 ;; then STEPS are applied, followed by a refresh and running every
 ;; compile.  A step is (insert POS STRING), (replace FROM TO) for the
-;; first FROM, `refresh', `run', `run-newest-first' (compiles finish
+;; first FROM, `refresh', `force' (`typst-overlay-refresh' with a prefix
+;; argument), `run', `run-newest-first' (compiles finish
 ;; out of order), `delete-images' (the cache folder's SVGs are deleted),
 ;; `reopen' (the mode is turned off and on), `remode' (the major mode
 ;; is set again, then the mode turned on, as its hook would),
@@ -883,6 +884,8 @@ refresh, so the equation is rendered once typst can start."
      ("$b$") ("$a$" "$b$"))
     ("failed and unchanged: not retried"
      "$a$ and $BAD$" () () ("$a$" "$BAD$ failed"))
+    ("forced refresh: everything compiled again, failures too"
+     "$a$ and $BAD$" (force) ("$a$" "$BAD$") ("$a$" "$BAD$ failed"))
     ("failed, edited and restored: retried"
      "$a$ and $BAD$" ((replace "$BAD$" "$BAX$") (replace "$BAX$" "$BAD$"))
      ("$BAD$") ("$a$" "$BAD$ failed"))
@@ -942,6 +945,7 @@ See `typst-overlay-test--edit-cases'."
              (search-forward from)
              (replace-match to t t))
             ('refresh (typst-overlay-refresh))
+            ('force (typst-overlay-refresh t))
             ('run (run-compiles))
             ('run-newest-first (run-compiles t))
             ('delete-images

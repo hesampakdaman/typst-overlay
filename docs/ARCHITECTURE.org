@@ -96,6 +96,6 @@ The tests are table-driven. Detection tables pair an input with the equations th
 
 *Imports.* typst reads the batch from stdin, with the project root as its root, so relative =#import= paths are rewritten from the buffer's folder to the root (=typst-overlay--root-paths=). Imported files are hashed into the cache key, so editing one renders its users again. Cache folders are per source folder because the same relative import can name different files in different folders.
 
-*Errors.* A failed equation keeps its source visible with an error overlay (face =typst-overlay-error=). The message is shown through ElDoc, =help-echo= and Flymake, all of them read from that overlay.
+*Errors.* A failed equation keeps its source visible with an error overlay (face =typst-overlay-error=). The message is shown through ElDoc, =help-echo= and Flymake, all of them read from that overlay. It is compiled again only once its cache key changes, so an error from outside the buffer, such as a package that could not be downloaded, stays until a forced refresh (=C-u M-x typst-overlay-refresh=), which tears everything down and starts from an empty artifact cache.
 
 *Compatibility.* Emacs 29.1 is the minimum (=Package-Requires=), and CI runs the tests on 29.1, 30 and 31, and byte-compiles with warnings as errors. It also runs package-lint, checkdoc and melpazoid. Newer features are guarded, as with the Flymake origin and the dotted underline.
