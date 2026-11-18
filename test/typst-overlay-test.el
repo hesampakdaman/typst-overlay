@@ -228,6 +228,28 @@ The case name is part of the compared value so failures show it."
      (("$k$" ""))))
   "Org prelude cases: (NAME INPUT ((EQUATION PRELUDE) ...)).")
 
+(ert-deftest typst-overlay-test-org-parse-cost ()
+  "Each equation is parsed from its own line, not the rest of its paragraph.
+A table has no blank lines, so it is one paragraph: parsing to its end
+from every $ made a refresh grow with the square of its rows."
+  (skip-unless (treesit-language-available-p 'typst))
+  (with-temp-buffer
+    (insert "| Name | Formula |\n|------+---------|\n"
+            (mapconcat (lambda (i) (format "| f%d | $x_%d^2$ |" i i))
+                       (number-sequence 1 100) "\n")
+            "\n")
+    (typst-overlay-test--setup-org)
+    (let ((parsed 0))
+      (cl-letf* ((math-end (symbol-function 'typst-overlay--math-end))
+                 ((symbol-function 'typst-overlay--math-end)
+                  (lambda (beg limit)
+                    (cl-incf parsed (- limit beg))
+                    (funcall math-end beg limit))))
+        (should (= (length (typst-overlay-analysis-math-nodes
+                            (typst-overlay--analyze-org)))
+                   100)))
+      (should (< parsed (* 2 (buffer-size)))))))
+
 (ert-deftest typst-overlay-test-org-prelude ()
   "Each org equation gets the code of the Typst export blocks before it."
   (skip-unless (treesit-language-available-p 'typst))
