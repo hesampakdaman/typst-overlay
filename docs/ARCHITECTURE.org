@@ -52,7 +52,7 @@ The cache key (=typst-overlay--make-element=) is the element's identity. It hash
 =typst-overlay--plan-render= turns the diff into a =typst-overlay-render-plan= of delete, place and render ops. It reads the registry and artifact cache and changes neither.
 
 - An /artifact/ is a cache key plus the path of its SVG.
-- The /registry/ maps an occurrence, its =(BEG . END)=, to a =typst-overlay-record=: the element, its overlay, its artifact, a state (=rendering=, =visible=, =stale=, =failed=) and a generation.
+- The /registry/ maps an occurrence, its =(BEG . END)=, to a =typst-overlay-record=: the element, its overlay, its artifact, a state (=rendering=, =visible=, =stale=, =failed=, =unstarted=) and a generation.
 
 *** =;; render=
 =typst-overlay--apply-render-plan= carries out the plan and is where Emacs overlays are made and deleted. Also here:
@@ -64,7 +64,7 @@ The cache key (=typst-overlay--make-element=) is the element's identity. It hash
 *** =;; batch compile=
 Starting =typst= costs far more than compiling an equation, so =typst-overlay--start-renders= groups equations by cache key into jobs, and spreads the jobs evenly over at most =typst-overlay-max-active-compiles= processes. Each process compiles a single document (=typst-overlay--batch-source=), with one page per job, written to one SVG per page. Each job is its own =#[...]= block, so one equation's prelude does not leak into the next.
 
-When a batch fails, typst reports only its first error and writes no pages. =typst-overlay--finish-batch= works out from the error's line which job failed, or which prelude (failing every job that shares it), and compiles the rest again. An error it cannot trace falls back to compiling each job on its own. A batch that cannot even start, because typst is gone from =PATH= or the cache folder cannot be written, is finished as such an error, so it frees its compile slot and its equations show why.
+When a batch fails, typst reports only its first error and writes no pages. =typst-overlay--finish-batch= works out from the error's line which job failed, or which prelude (failing every job that shares it), and compiles the rest again. An error it cannot trace falls back to compiling each job on its own. A batch that cannot even start, because typst is gone from =PATH= or the cache folder cannot be written, frees its compile slot at once (=typst-overlay--batch-not-started=). Its equations show why, in state =unstarted=, and unlike those typst failed to compile they are tried again at every refresh, so they render once typst can start.
 
 An error on a line of a job's prelude could be either: typst reports a bad call of a function, as in =$#f("a")$=, in the function's body. So the document evaluates each prelude on its own first (=typst-overlay--prelude-check=), before the first job that uses it. An error in that check fails every job sharing the prelude; an error in a job's block fails that job alone.
 

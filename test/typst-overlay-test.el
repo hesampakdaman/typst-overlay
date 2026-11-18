@@ -707,7 +707,9 @@ A bad call of a function it defines fails only the equation calling it."
       (should (= (length (typst-overlay-test--overlays 'typst-overlay)) 4)))))
 
 (ert-deftest typst-overlay-test-batch-start-fails ()
-  "A compile that fails to start fails its equations and frees its slot."
+  "A compile that fails to start shows why, frees its slot, and is retried.
+Unlike an error typst reports, it is compiled again at the next
+refresh, so the equation is rendered once typst can start."
   (skip-unless (treesit-language-available-p 'typst))
   (let ((typst-overlay-max-active-compiles 1))
     (typst-overlay-test--with-batches "$a$ and $b$." #'ignore
@@ -720,16 +722,18 @@ A bad call of a function it defines fails only the equation calling it."
         (goto-char (point-min))
         (search-forward "$b$")
         (replace-match "$c$" t t)
-        (typst-overlay-refresh))
+        (typst-overlay-refresh)
+        (should (equal (typst-overlay-test--shown) '("$a$" "$c$ failed")))
+        (should (string-search "typst" (overlay-get (car (typst-overlay-test--overlay-list
+                                                          'typst-overlay-error))
+                                                    'typst-overlay-error))))
+      ;; Typst is back: a refresh compiles $c$, unchanged, and $d$.
       (goto-char (point-min))
       (search-forward "$a$")
       (replace-match "$d$" t t)
       (typst-overlay-refresh)
       (run-compiles)
-      (should (equal (typst-overlay-test--shown) '("$d$" "$c$ failed")))
-      (should (string-search "typst" (overlay-get (car (typst-overlay-test--overlay-list
-                                                        'typst-overlay-error))
-                                                  'typst-overlay-error))))))
+      (should (equal (typst-overlay-test--shown) '("$d$" "$c$"))))))
 
 (ert-deftest typst-overlay-test-imported-file-changed ()
   "Equations are compiled again when a file they import changes."

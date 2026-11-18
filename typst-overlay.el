@@ -1003,7 +1003,7 @@ has moved, and checking the disk for each of them is slow."
 
 (cl-defstruct typst-overlay-record
   element      ;; typst-overlay-element (current occurrence)
-  state        ;; 'rendering 'visible 'stale 'failed
+  state        ;; 'rendering 'visible 'stale 'failed 'unstarted
   overlay      ;; Emacs overlay or nil
   artifact     ;; typst-overlay-artifact or nil
   generation)  ;; integer: guards async staleness
@@ -1093,6 +1093,7 @@ ARTIFACT-CACHE, and a render op compiles it again.
 Cases:
 - unchanged + no overlay + artifact on disk  -> place-op
 - unchanged + stale record, nothing on disk  -> render-op
+- unchanged + compile could not be started   -> render-op
 - moved + old record's artifact reusable     -> place-op
 - moved otherwise                            -> render-op
 - added + artifact cache hit                 -> place-op
@@ -1110,12 +1111,16 @@ Cases:
                  :old old-element :new new-element)))
       (pcase (typst-overlay-diff-entry-status entry)
         ('unchanged
-         ;; Overlay first: checking the disk for every equation is slow.
-         ;; A stale record has no overlay.
-         (when (and record (null (typst-overlay-record-overlay record)))
+         (cond
+          ((null record) nil)
+          ;; Its error overlay stays until it is tried again.
+          ((eq (typst-overlay-record-state record) 'unstarted) (render))
+          ;; Overlay first: checking the disk for every equation is slow.
+          ;; A stale record has no overlay.
+          ((null (typst-overlay-record-overlay record))
            (cond
             ((typst-overlay--artifact-live-p artifact) (place artifact))
-            ((eq (typst-overlay-record-state record) 'stale) (render)))))
+            ((eq (typst-overlay-record-state record) 'stale) (render))))))
         ('moved
          (if (typst-overlay--artifact-reusable-p record new-element artifact)
              (place artifact)
@@ -1765,8 +1770,7 @@ ARTIFACT-CACHE receives the results.  SESSION is the
 `typst-overlay--session' the batch belongs to.
 
 If the folder cannot be made or typst cannot be started, as when it
-is no longer on PATH, the batch fails at once with that error, which
-frees its compile slot and is shown on its equations."
+is no longer on PATH, see `typst-overlay--batch-not-started'."
   (let* (;; #import paths are relative to the buffer's file, or for
          ;; buffers without one, its directory.
          (file-dir (with-current-buffer buffer
@@ -1779,19 +1783,36 @@ frees its compile slot and is shown on its equations."
          ;; Typst takes the folder it runs in as the root of a source
          ;; read from stdin.
          (default-directory root))
-    (cl-flet ((finish (ok output)
-                (unwind-protect
-                    (when (buffer-live-p buffer)
-                      (with-current-buffer buffer
-                        (typst-overlay--finish-batch
-                         jobs (cdr source) dir ok output artifact-cache session)))
-                  (when dir
-                    (delete-directory dir t)))))
-      (condition-case err
-          (progn
-            (setq dir (make-temp-file (expand-file-name "batch-" cache-dir) t))
-            (typst-overlay--compile-async (car source) dir #'finish))
-        (file-error (finish nil (error-message-string err)))))))
+    (condition-case err
+        (progn
+          (setq dir (make-temp-file (expand-file-name "batch-" cache-dir) t))
+          (typst-overlay--compile-async
+           (car source) dir
+           (lambda (ok output)
+             (unwind-protect
+                 (when (buffer-live-p buffer)
+                   (with-current-buffer buffer
+                     (typst-overlay--finish-batch
+                      jobs (cdr source) dir ok output artifact-cache session)))
+               (delete-directory dir t)))))
+      (file-error
+       (when dir
+         (delete-directory dir t))
+       (typst-overlay--batch-not-started
+        jobs artifact-cache (error-message-string err))))))
+
+(defun typst-overlay--batch-not-started (jobs artifact-cache message)
+  "Handle JOBS, whose batch could not be started, with error MESSAGE.
+Its compile slot is freed, and its equations are underlined with
+MESSAGE, in state `unstarted': unlike equations typst failed to
+compile, they are compiled again at every refresh, so they are
+rendered once typst can start.  Trying costs nothing while it cannot.
+ARTIFACT-CACHE is passed on."
+  (cl-decf typst-overlay--active-compiles)
+  (dolist (job jobs)
+    (typst-overlay--finish-job job artifact-cache message 'unstarted))
+  (typst-overlay--drain-compile-queue)
+  (typst-overlay--flymake-report))
 
 (defun typst-overlay--font-args ()
   "Return the arguments telling typst which fonts it may use.
@@ -1842,7 +1863,7 @@ whose SESSION is outdated, are ignored."
         (typst-overlay--release-job job))
     (cl-decf typst-overlay--active-compiles)
     (typst-overlay--warn-unknown-fonts output)
-    (let* ((pages (and ok (typst-overlay--batch-pages dir)))
+    (let* ((pages (typst-overlay--batch-pages dir))
            (errors (and (not ok) (typst-overlay--compile-errors output)))
            (location (car errors))
            failed)
@@ -1906,14 +1927,15 @@ is warned about once."
     (set-marker (car markers) nil)
     (set-marker (cdr markers) nil)))
 
-(defun typst-overlay--finish-job (job artifact-cache error)
+(defun typst-overlay--finish-job (job artifact-cache error &optional state)
   "Show the result of JOB for each of its equations: its SVG, or ERROR.
-ERROR is nil for a successful result, which ARTIFACT-CACHE receives."
+ERROR is nil for a successful result, which ARTIFACT-CACHE receives.
+STATE is the state of a failed equation's record, by default `failed'."
   (pcase-dolist (`(,element . ,markers) (typst-overlay-job-occurrences job))
     (let ((current (typst-overlay--relocate-element element markers)))
       (if error
           (typst-overlay--handle-render-failure
-           element current (typst-overlay-job-generation job) error)
+           element current (typst-overlay-job-generation job) error state)
         (typst-overlay--handle-render-success
          element current (typst-overlay-job-generation job)
          (typst-overlay-element-cache-key element)
@@ -1973,18 +1995,20 @@ CACHE-KEY, SVG-PATH and ARTIFACT-CACHE describe the new artifact."
         (car lines)
         "Compilation failed")))
 
-(defun typst-overlay--handle-render-failure (element current generation message)
+(defun typst-overlay--handle-render-failure
+    (element current generation message &optional state)
   "Mark ELEMENT failed if its record still matches GENERATION.
 CURRENT is ELEMENT at its position now, or nil if its text changed
 while compiling.  If CURRENT is non-nil, underline it with face
 `typst-overlay-error' and attach the error MESSAGE, which is shown
-when point enters the equation."
+when point enters the equation.  The record's STATE is `failed', or
+`unstarted' if its compile could not be started."
   (when typst-overlay-mode
     (let ((record (typst-overlay--get-record typst-overlay--registry element)))
       (when (and record
                  (= (typst-overlay-record-generation record) generation))
         (typst-overlay--delete-record-overlay record)
-        (setf (typst-overlay-record-state record) 'failed
+        (setf (typst-overlay-record-state record) (or state 'failed)
               (typst-overlay-record-overlay record)
               (and current
                    (typst-overlay--place-error-overlay current message)))))))
